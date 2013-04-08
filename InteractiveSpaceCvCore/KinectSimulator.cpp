@@ -44,8 +44,14 @@ int iseKinectInitWithSettings(const IseCommonSettings* settings, const char* rec
 	return 0;
 }
 
-int iseKinectCapture(IseRgbFrame* rgbFrame, IseDepthFrame* depthFrame)
+int iseKinectCapture(IseRgbFrame* rgbFrame, IseDepthFrame* depthFrame, int dataCopy)
 {
+	if (dataCopy)
+	{
+		//TODO: implement
+		assert(0);
+	}
+
 	if (_currentFrame >= _frameCount)
 	{
 		return ERROR_KINECT_EOF;

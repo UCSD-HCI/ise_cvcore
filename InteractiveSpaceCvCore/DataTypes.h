@@ -2,11 +2,17 @@
 #ifndef ISE_DATA_TYPES_H
 #define ISE_DATA_TYPES_H
 
+#ifndef NULL
+#define NULL 0
+#endif
+
 typedef unsigned char uchar;
 typedef unsigned short ushort;
 
 //sub-structures
-struct IseOmniTouchParameters;
+typedef struct _IseOmniTouchParameters
+{
+} IseOmniTouchParameters;
 
 typedef struct _IseKinectIntrinsicParameters
 {
@@ -20,10 +26,14 @@ typedef struct _IseCommonSettings
 	int rgbHeight;
 	int depthWidth;
 	int depthHeight;
+	int maxDepthValue;
 	IseKinectIntrinsicParameters kinectIntrinsicParameters;
 } IseCommonSettings;
 
-struct IseDynamicParameters;
+typedef struct _IseDynamicParameters
+{
+	IseOmniTouchParameters omniTouchParam;
+} IseDynamicParameters;
 
 typedef struct _IseRgbFrame
 {
@@ -53,6 +63,11 @@ typedef struct _IseDepthFrame
 	ushort* data;	//16-bit depth per pixel
 } IseDepthFrame;
 
-struct IseDetectionResults;
+typedef struct _IseFingerDetectionResults
+{
+	int error;	//0 for no error
+
+} IseFingerDetectionResults;
+
 
 #endif

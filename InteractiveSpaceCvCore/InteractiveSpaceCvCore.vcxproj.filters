@@ -15,6 +15,9 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="Detector.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="main.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -26,13 +29,10 @@
     <ClInclude Include="DataTypes.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="FingerTracker.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="ProcessorInterface.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="KinectSimulator.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Detector.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
