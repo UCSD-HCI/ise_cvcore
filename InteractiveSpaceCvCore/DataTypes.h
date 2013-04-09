@@ -19,6 +19,18 @@ typedef struct _IseKinectIntrinsicParameters
 	
 } IseKinectIntrinsicParameters;
 
+typedef struct _IseImageHeader
+{
+	int width;
+	int height;
+	int dataBytes; //in bytes
+
+	// data owner means the data is only accessible by this frame struct; 
+	// isDataOnwer == 0 means the data is created and managed by some other objects, and thus you should not delete it 
+	// Warning: Consider carefully when you assign an IseRgbFrame to another. i.e., either copy pointer only and set isDataOnwer = 0, or explictly copy data and set isDataOwner = 1, 
+	int isDataOwner; 
+} IseImageHeader;
+
 //root level structures
 typedef struct _IseCommonSettings
 {
@@ -37,31 +49,23 @@ typedef struct _IseDynamicParameters
 
 typedef struct _IseRgbFrame
 {
-	int width;
-	int height;
-	int dataBytes;	//in bytes
-
-	// data owner means the data is only accessible by this frame struct; 
-	// isDataOnwer == 0 means the data is created and managed by some other objects, and thus you should not delete it 
-	// Warning: Consider carefully when you assign an IseRgbFrame to another. i.e., either copy pointer only and set isDataOnwer = 0, or explictly copy data and set isDataOwner = 1, 
-	int isDataOwner; 
+	IseImageHeader header;
 
 	uchar* data;	//RGB888
 } IseRgbFrame;
 
 typedef struct _IseDepthFrame
 {
-	int width;
-	int height;
-	int dataBytes;	//in bytes
-
-	// data owner means the data is only accessible by this frame struct; 
-	// isDataOnwer == 0 means the data is created and managed by some other objects, and thus you should not delete it 
-	// Warning: Consider carefully when you assign an IseDepthFrame to another. i.e., either copy pointer only and set isDataOnwer = 0, or explictly copy data and set isDataOwner = 1, 
-	int isDataOwner;
+	IseImageHeader header;
 
 	ushort* data;	//16-bit depth per pixel
 } IseDepthFrame;
+
+typedef struct _IseSobelFrame
+{
+	IseImageHeader header;
+	int* data;
+} IseSobelFrame;
 
 typedef struct _IseFingerDetectionResults
 {

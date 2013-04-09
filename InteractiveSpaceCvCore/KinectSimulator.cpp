@@ -64,16 +64,16 @@ int iseKinectCapture(IseRgbFrame* rgbFrame, IseDepthFrame* depthFrame, int dataC
 
 	_currentFrame++;
 
-	rgbFrame->width = _rgbFrameIpl->width;
-	rgbFrame->height = _rgbFrameIpl->height;
-	rgbFrame->dataBytes = _rgbFrameIpl->imageSize;
-	rgbFrame->isDataOwner = 0;
+	rgbFrame->header.width = _rgbFrameIpl->width;
+	rgbFrame->header.height = _rgbFrameIpl->height;
+	rgbFrame->header.dataBytes = _rgbFrameIpl->imageSize;
+	rgbFrame->header.isDataOwner = 0;
 	rgbFrame->data = (uchar*)_rgbFrameIpl->imageData;
 
-	depthFrame->width = _depthFrameIpl->width;
-	depthFrame->height = _depthFrameIpl->height;
-	depthFrame->dataBytes = _depthFrameIpl->imageSize;
-	depthFrame->isDataOwner = 0;
+	depthFrame->header.width = _depthFrameIpl->width;
+	depthFrame->header.height = _depthFrameIpl->height;
+	depthFrame->header.dataBytes = _depthFrameIpl->imageSize;
+	depthFrame->header.isDataOwner = 0;
 	depthFrame->data = (ushort*)_depthFrameIpl->imageData;
 
 	return 0;
