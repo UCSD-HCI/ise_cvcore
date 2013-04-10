@@ -9,6 +9,7 @@
 typedef unsigned char uchar;
 typedef unsigned short ushort;
 
+
 //sub-structures
 typedef struct _IseOmniTouchParameters
 {
@@ -23,6 +24,7 @@ typedef struct _IseImageHeader
 {
 	int width;
 	int height;
+	int bytesPerPixel; //in bytes
 	int dataBytes; //in bytes
 
 	// data owner means the data is only accessible by this frame struct; 
@@ -73,5 +75,7 @@ typedef struct _IseFingerDetectionResults
 
 } IseFingerDetectionResults;
 
+
+IseImageHeader iseCreateImageHeader(int width, int height, int bytesPerPixel, int isDataOwner = 0);
 
 #endif

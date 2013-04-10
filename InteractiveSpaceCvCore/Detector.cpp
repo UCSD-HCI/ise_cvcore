@@ -181,10 +181,7 @@ int iseDetectorInitWithSettings(const IseCommonSettings* settings)
 	//on device: upload settings to device memory
 
 	//init sobel
-	_sobelFrame.header.width = settings->depthWidth;
-	_sobelFrame.header.height = settings->depthHeight;
-	_sobelFrame.header.dataBytes = _sobelFrame.header.width * _sobelFrame.header.height * 4;
-	_sobelFrame.header.isDataOwner = 1;
+	_sobelFrame.header = iseCreateImageHeader(settings->depthWidth, settings->depthHeight, sizeof(int), 1);
 	_sobelFrame.data = (int*)malloc(_sobelFrame.header.dataBytes);
 
 	//init histogram for debug
@@ -219,6 +216,7 @@ IseFingerDetectionResults iseDetectorDetect(const IseRgbFrame* rgbFrame, const I
 int iseDetectorRelease()
 {
 	free(_sobelFrame.data);
+	_sobelFrame.data = NULL;
 	_sobelFrame.header.isDataOwner = 0;
 
 	free(_histogram);

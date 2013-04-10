@@ -7,17 +7,32 @@
 static IplImage* _rgbFrameIpl;
 static IplImage* _depthFrameIpl;
 
+//passed by from the caller. KinectSimulator won't release them. 
+static IseRgbFrame* _rgbFrame;
+static IseDepthFrame* _depthFrame;
+static int _dataCopy;
+
 static FILE* _depthFp;
 static CvCapture* _rgbCapture;
 
 static int _currentFrame;
 static int _frameCount;
 
-int iseKinectInitWithSettings(const IseCommonSettings* settings, const char* recFilePrefix)
+int iseKinectInitWithSettings(const IseCommonSettings* settings, const char* recFilePrefix, IseRgbFrame* rgbFrameBuffer, IseDepthFrame* depthFrameBuffer, int dataCopy)
 {
 	_rgbFrameIpl = cvCreateImage(cvSize(settings->rgbWidth, settings->rgbHeight), IPL_DEPTH_8U, 3);
 	_depthFrameIpl = cvCreateImage(cvSize(settings->depthWidth, settings->depthHeight), IPL_DEPTH_16U, 1);
 	
+	_rgbFrame = rgbFrameBuffer;
+	_depthFrame = depthFrameBuffer;
+	_dataCopy = dataCopy;
+	
+	if (!_dataCopy)
+	{
+		//just point the data pointer in rgb/depth frame to the data in rgb/depth ipl frame.
+		_rgbFrame->data = (uchar*)_rgbFrameIpl->imageData;
+		_depthFrame->data = (ushort*)_depthFrameIpl->imageData;
+	}
 
 	//open rgb capture
 	char path[255];
@@ -44,9 +59,9 @@ int iseKinectInitWithSettings(const IseCommonSettings* settings, const char* rec
 	return 0;
 }
 
-int iseKinectCapture(IseRgbFrame* rgbFrame, IseDepthFrame* depthFrame, int dataCopy)
+int iseKinectCapture()
 {
-	if (dataCopy)
+	if (_dataCopy)
 	{
 		//TODO: implement
 		assert(0);
@@ -64,18 +79,6 @@ int iseKinectCapture(IseRgbFrame* rgbFrame, IseDepthFrame* depthFrame, int dataC
 
 	_currentFrame++;
 
-	rgbFrame->header.width = _rgbFrameIpl->width;
-	rgbFrame->header.height = _rgbFrameIpl->height;
-	rgbFrame->header.dataBytes = _rgbFrameIpl->imageSize;
-	rgbFrame->header.isDataOwner = 0;
-	rgbFrame->data = (uchar*)_rgbFrameIpl->imageData;
-
-	depthFrame->header.width = _depthFrameIpl->width;
-	depthFrame->header.height = _depthFrameIpl->height;
-	depthFrame->header.dataBytes = _depthFrameIpl->imageSize;
-	depthFrame->header.isDataOwner = 0;
-	depthFrame->data = (ushort*)_depthFrameIpl->imageData;
-
 	return 0;
 }
 
@@ -86,6 +89,9 @@ int iseKinectRelease()
 
 	cvReleaseImage(&_rgbFrameIpl);
 	cvReleaseImage(&_depthFrameIpl);
+
+	_rgbFrame->data = NULL;
+	_depthFrame->data = NULL;
 
 	return 0;
 }
