@@ -6,6 +6,8 @@
 #define NULL 0
 #endif
 
+#define ISE_MAX_FINGER_NUM 20
+
 typedef unsigned char uchar;
 typedef unsigned short ushort;
 
@@ -48,6 +50,13 @@ typedef struct _IseImageHeader
 	int isDataOwner; 
 } IseImageHeader;
 
+typedef struct _IseFinger
+{
+	int tipX, tipY, tipZ;
+	int endX, endY, endZ;
+	int isOnSurface;
+} IseFinger;
+
 //root level structures
 typedef struct _IseCommonSettings
 {
@@ -87,6 +96,8 @@ typedef struct _IseSobelFrame
 typedef struct _IseFingerDetectionResults
 {
 	int error;	//0 for no error
+	int fingerCount;
+	IseFinger fingers[ISE_MAX_FINGER_NUM];
 
 } IseFingerDetectionResults;
 

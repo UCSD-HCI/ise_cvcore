@@ -527,6 +527,7 @@ int iseDetectorInitWithSettings(const IseCommonSettings* settings)
 	return 0;
 }
 
+//update the parameters used by the algorithm
 int iseDetectorUpdateDynamicParameters(const IseDynamicParameters* parameters)
 {
 	_parameters = *parameters;
@@ -535,7 +536,9 @@ int iseDetectorUpdateDynamicParameters(const IseDynamicParameters* parameters)
 	return 0;
 }
 
-IseFingerDetectionResults iseDetectorDetect(const IseRgbFrame* rgbFrame, const IseDepthFrame* depthFrame, IseRgbFrame* debugFrame)
+//the algorithm goes here. The detection algorithm runs per frame. The input is rgbFrame and depthFrame. The output is the return value, and also the debug frame.
+//have a look at main() to learn how to use this.
+IseFingerDetectionResults iseDetectorDetect(const IseRgbFrame* rgbFrame, const IseDepthFrame* depthFrame, /*out*/ IseRgbFrame* debugFrame)
 {
 	//_iseHistEqualize(depthFrame, debugFrame);
 
@@ -555,6 +558,18 @@ IseFingerDetectionResults iseDetectorDetect(const IseRgbFrame* rgbFrame, const I
 	IseFingerDetectionResults r;
 
 	r.error = 0;
+	r.fingerCount = fingers.size() < ISE_MAX_FINGER_NUM ? fingers.size() : ISE_MAX_FINGER_NUM;
+	for (int i = 0; i < r.fingerCount; i++)
+	{
+		r.fingers[i].tipX = fingers[i].tipX;
+		r.fingers[i].tipY = fingers[i].tipY;
+		r.fingers[i].tipZ = fingers[i].tipZ;
+		r.fingers[i].endX = fingers[i].endX;
+		r.fingers[i].endY = fingers[i].endY;
+		r.fingers[i].endZ = fingers[i].endZ;
+		r.fingers[i].isOnSurface = fingers[i].isOnSurface ? 1 : 0;
+	}
+
 	return r;
 }
 
