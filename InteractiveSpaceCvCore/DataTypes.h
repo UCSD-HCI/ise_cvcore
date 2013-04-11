@@ -13,11 +13,26 @@ typedef unsigned short ushort;
 //sub-structures
 typedef struct _IseOmniTouchParameters
 {
+	int stripMaxBlankPixel;
+	int fingerMinPixelLength;
+	int fingerToHandOffset;	//in millimeters
+	int clickFloodArea;
+
+	double fingerWidthMin;
+	double fingerWidthMax;
+	double fingerLengthMin;
+	double fingerLengthMax;
+	double fingerRisingThreshold;
+	double fingerFallingThreshold;
+	double clickFloodMaxGrad;
 } IseOmniTouchParameters;
 
 typedef struct _IseKinectIntrinsicParameters
 {
-	
+	float realWorldXToZ;
+	float realWorldYToZ;
+	float depthSlope;
+	float depthIntercept;
 } IseKinectIntrinsicParameters;
 
 typedef struct _IseImageHeader

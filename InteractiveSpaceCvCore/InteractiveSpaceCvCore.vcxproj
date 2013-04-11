@@ -72,11 +72,14 @@
     <ClCompile Include="Detector.cpp" />
     <ClCompile Include="KinectSimulator.cpp" />
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="SettingsReader.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="DataTypes.h" />
+    <ClInclude Include="DebugUtils.h" />
     <ClInclude Include="Detector.h" />
     <ClInclude Include="KinectSimulator.h" />
+    <ClInclude Include="SettingsReader.h" />
   </ItemGroup>
   <ItemGroup>
     <CustomBuild Include="freeglut\bin\x64\freeglut.dll">

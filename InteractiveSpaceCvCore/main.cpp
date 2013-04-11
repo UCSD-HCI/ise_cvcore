@@ -6,6 +6,7 @@
 #include "DataTypes.h"
 #include "KinectSimulator.h"
 #include "Detector.h"
+#include "SettingsReader.h"
 
 #include <GL/glew.h>
 #include <gl/GL.h>
@@ -36,7 +37,7 @@ void glutDisplay()
 
 	//opengl draw
 	glClear(GL_COLOR_BUFFER_BIT);
-	glDrawPixels(_settings.depthWidth, _settings.depthHeight, GL_RGB, GL_UNSIGNED_BYTE, _rgbFrame.data);
+	glDrawPixels(_settings.depthWidth, _settings.depthHeight, GL_RGB, GL_UNSIGNED_BYTE, _debugFrame.data);
 	glutSwapBuffers();
 
 	//compute fps
@@ -54,12 +55,12 @@ void glutDisplay()
 
 int main(int argc, char** argv)
 {
+	const char pathPrefix[] = "C:\\Users\\cuda\\kinect\\record\\rec130408-1700";
 
-	_settings.rgbWidth = 640;
-	_settings.rgbHeight = 480;
-	_settings.depthWidth = 640;
-	_settings.depthHeight = 480;
-	_settings.maxDepthValue = 65535;
+	//load settings
+	loadCommonSettings(pathPrefix, &_settings);
+	IseDynamicParameters dynamicParams;
+	loadDynamicParameters(pathPrefix, &dynamicParams);
 
 	//init rgb/depth frame
 	_rgbFrame.header = iseCreateImageHeader(_settings.rgbWidth, _settings.rgbHeight, 3);
@@ -70,8 +71,9 @@ int main(int argc, char** argv)
 	_debugFrame.data = (uchar*)malloc(_debugFrame.header.dataBytes);
 
 	//init simulator and detector
-	iseKinectInitWithSettings(&_settings, "C:\\Users\\cuda\\kinect\\record\\rec130408-1700", &_rgbFrame, &_depthFrame);
+	iseKinectInitWithSettings(&_settings, pathPrefix, &_rgbFrame, &_depthFrame);
 	iseDetectorInitWithSettings(&_settings);
+	iseDetectorUpdateDynamicParameters(&dynamicParams);
 
 	//init glut
 	glutInit(&argc, argv);
@@ -85,9 +87,6 @@ int main(int argc, char** argv)
 	glClearColor (0.0, 0.0, 0.0, 0.0);
 	glRasterPos2i(-1, 1);
 	glPixelZoom(1.0f, -1.0f);
-
-	//prepare pixel buffer
-	glGenBuffersARB(1, &_bufferObj);
 
 	glutDisplayFunc(glutDisplay);
 	glutIdleFunc(glutDisplay);
