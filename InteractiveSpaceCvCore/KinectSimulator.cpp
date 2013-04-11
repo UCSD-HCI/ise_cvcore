@@ -38,7 +38,7 @@ int iseKinectInitWithSettings(const IseCommonSettings* settings, const char* rec
 	char path[255];
 	sprintf(path, "%s.rgb.avi", recFilePrefix);
 	_rgbCapture = cvCaptureFromAVI(path);
-	_frameCount = cvGetCaptureProperty(_rgbCapture, CV_CAP_PROP_FRAME_COUNT);
+	_frameCount = (int)cvGetCaptureProperty(_rgbCapture, CV_CAP_PROP_FRAME_COUNT);
 
 	sprintf(path, "%s.depth.bin", recFilePrefix);
 	_depthFp = fopen(path, "rb");
@@ -73,7 +73,8 @@ int iseKinectCapture()
 	}
 
 	IplImage* frame = cvQueryFrame(_rgbCapture);
-	cvCopy(frame, _rgbFrameIpl);
+	cvCvtColor(frame, _rgbFrameIpl, CV_BGR2RGB);
+	//cvCopy(frame, _rgbFrameIpl);
 
 	fread(_depthFrameIpl->imageData, _depthFrameIpl->imageSize, 1, _depthFp);
 

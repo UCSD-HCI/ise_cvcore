@@ -1,90 +1,105 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include <highgui.h>
 #include <Windows.h> //for timer
 
 #include "DataTypes.h"
 #include "KinectSimulator.h"
 #include "Detector.h"
 
-int main()
+#include <GL/glew.h>
+#include <gl/GL.h>
+#include <GL/freeglut.h>
+
+static IseCommonSettings _settings;
+static IseRgbFrame _rgbFrame;
+static IseDepthFrame _depthFrame;
+static IseRgbFrame _debugFrame;
+static GLuint _bufferObj;
+
+void glutDisplay()
 {
-	const char windowName[] = "Window";
+	static int fpsFrameCount = 0;
+	static int fpsStartTime = 0;
+	static int fpsCurrTime = 0;
 
-	IseCommonSettings settings;
-	settings.rgbWidth = 640;
-	settings.rgbHeight = 480;
-	settings.depthWidth = 640;
-	settings.depthHeight = 480;
-	settings.maxDepthValue = 65535;
-
-	cvNamedWindow(windowName);
-
-	IseRgbFrame rgbFrame;
-	IseDepthFrame depthFrame;
-	IseRgbFrame debugFrame;
-
-	//init rgb/depth frame
-	rgbFrame.header = iseCreateImageHeader(settings.rgbWidth, settings.rgbHeight, 3);
-	depthFrame.header = iseCreateImageHeader(settings.depthWidth, settings.depthHeight, sizeof(ushort));
-
-	//allocate debug frame
-	debugFrame.header = iseCreateImageHeader(settings.depthWidth, settings.depthHeight, 3, 1);
-	debugFrame.data = (uchar*)malloc(debugFrame.header.dataBytes);
-
-	//init simulator and detector
-	iseKinectInitWithSettings(&settings, "C:\\Users\\cuda\\kinect\\record\\rec130408-1700", &rgbFrame, &depthFrame);
-	iseDetectorInitWithSettings(&settings);
-
-	//for output
-	IplImage* debugFrameIpl = cvCreateImageHeader(cvSize(settings.depthWidth, settings.depthHeight), IPL_DEPTH_8U, 3);
-
-	//timer for FPS
-	LARGE_INTEGER timerFreq;
-	QueryPerformanceFrequency(&timerFreq);
-	LARGE_INTEGER startTime;
-	LARGE_INTEGER checkTime;
-	QueryPerformanceCounter(&startTime);
-	checkTime.QuadPart = startTime.QuadPart + timerFreq.QuadPart;	//after 1 sec
-	int frameCount = 0;
-
-	while(iseKinectCapture() != ERROR_KINECT_EOF)
-	{ 
-		//rgbFrameIpl->imageData = (char*)rgbFrame.data;
-		//cvShowImage(windowName, rgbFrameIpl);
-
-		iseDetectorDetect(&rgbFrame, &depthFrame, &debugFrame);
-		debugFrameIpl->imageData = (char*)debugFrame.data;
-		//cvShowImage(windowName, debugFrameIpl);
-
-		LARGE_INTEGER currTime;
-		QueryPerformanceCounter(&currTime);
-		frameCount++;
-
-		if (currTime.QuadPart >= checkTime.QuadPart)
-		{
-			//report fps
-			double fps = frameCount / (double)(currTime.QuadPart - startTime.QuadPart) * (double)(timerFreq.QuadPart);
-			printf("FPS=%6.2f\r", fps);
-
-			QueryPerformanceCounter(&startTime);
-			checkTime.QuadPart = startTime.QuadPart + timerFreq.QuadPart;	//after 1 sec
-			frameCount = 0;
-		}
-
-		/*if (cvWaitKey(1) == 27)
-		{
-			break; 
-		}*/
+	if (iseKinectCapture() == ERROR_KINECT_EOF)
+	{
+		glutLeaveMainLoop();
+		return;
 	}
 
+	//rgbFrameIpl->imageData = (char*)rgbFrame.data;
+	//cvShowImage(windowName, rgbFrameIpl);
+
+	iseDetectorDetect(&_rgbFrame, &_depthFrame, &_debugFrame);
+
+	//opengl draw
+	glClear(GL_COLOR_BUFFER_BIT);
+	glDrawPixels(_settings.depthWidth, _settings.depthHeight, GL_RGB, GL_UNSIGNED_BYTE, _rgbFrame.data);
+	glutSwapBuffers();
+
+	//compute fps
+	fpsCurrTime = glutGet(GLUT_ELAPSED_TIME);
+	fpsFrameCount++;
+	if (fpsCurrTime - fpsStartTime > 1000)
+	{
+		double fps = fpsFrameCount * 1000.0 / (fpsCurrTime - fpsStartTime);
+		fpsStartTime = fpsCurrTime;
+		fpsFrameCount = 0;
+
+		printf("FPS = %6.2f\r", fps);
+	}
+}
+
+int main(int argc, char** argv)
+{
+
+	_settings.rgbWidth = 640;
+	_settings.rgbHeight = 480;
+	_settings.depthWidth = 640;
+	_settings.depthHeight = 480;
+	_settings.maxDepthValue = 65535;
+
+	//init rgb/depth frame
+	_rgbFrame.header = iseCreateImageHeader(_settings.rgbWidth, _settings.rgbHeight, 3);
+	_depthFrame.header = iseCreateImageHeader(_settings.depthWidth, _settings.depthHeight, sizeof(ushort));
+
+	//allocate debug frame
+	_debugFrame.header = iseCreateImageHeader(_settings.depthWidth, _settings.depthHeight, 3, 1);
+	_debugFrame.data = (uchar*)malloc(_debugFrame.header.dataBytes);
+
+	//init simulator and detector
+	iseKinectInitWithSettings(&_settings, "C:\\Users\\cuda\\kinect\\record\\rec130408-1700", &_rgbFrame, &_depthFrame);
+	iseDetectorInitWithSettings(&_settings);
+
+	//init glut
+	glutInit(&argc, argv);
+	glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB);
+	glutInitWindowSize(_settings.depthWidth, _settings.depthHeight);
+	glutInitWindowPosition(500, 500);
+	glutCreateWindow("Window");
+	glutSetOption(GLUT_ACTION_ON_WINDOW_CLOSE, GLUT_ACTION_CONTINUE_EXECUTION);
+
+	//set opengl parameters
+	glClearColor (0.0, 0.0, 0.0, 0.0);
+	glRasterPos2i(-1, 1);
+	glPixelZoom(1.0f, -1.0f);
+
+	//prepare pixel buffer
+	glGenBuffersARB(1, &_bufferObj);
+
+	glutDisplayFunc(glutDisplay);
+	glutIdleFunc(glutDisplay);
+	glutMainLoop();	
+
+	//release resources
 	iseDetectorRelease();
 	iseKinectRelease();
 
-	free(debugFrame.data);
-	debugFrame.data = NULL;
-	debugFrame.header.isDataOwner = 0;
+	free(_debugFrame.data);
+	_debugFrame.data = NULL;
+	_debugFrame.header.isDataOwner = 0;
 
 	return 0;
 }

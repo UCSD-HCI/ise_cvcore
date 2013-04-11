@@ -13,6 +13,9 @@
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
+    <Filter Include="DLLx64">
+      <UniqueIdentifier>{2f625fa1-f41c-431f-b6e4-a68ba13fdd12}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Detector.cpp">
@@ -38,5 +41,13 @@
     <ClInclude Include="Detector.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="freeglut\bin\x64\freeglut.dll">
+      <Filter>DLLx64</Filter>
+    </CustomBuild>
+    <CustomBuild Include="glew_x64\bin\glew32.dll">
+      <Filter>DLLx64</Filter>
+    </CustomBuild>
   </ItemGroup>
 </Project>
