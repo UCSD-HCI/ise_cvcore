@@ -60,9 +60,13 @@ static IseDepthFrame _adjustedDepthFrame;
 static int _maxHistogramSize;
 static int* _histogram;
 static uchar* _floodHitTestVisitedFlag;
+static vector<vector<OmniTouchStrip> > _strips;
+static vector<OmniTouchFinger> _fingers;
 
 void _iseHistEqualize(const IseDepthFrame* depthFrame, IseRgbFrame* debugFrame)
 {
+	assert(0);	//deprecated
+
 	if (!debugFrame)
 	{
 		return;
@@ -133,73 +137,10 @@ void _iseDetectorSobel(const IseDepthFrame* src, IseDepthFrame* adjustedSrc, Ise
 	IplImage* dstIpl = cvCreateImageHeader(cvSize(_settings.depthWidth, _settings.depthHeight), IPL_DEPTH_32F, 1);
 	
 	srcIpl->imageData = (char*)adjustedSrc->data;
-	dstIpl->imageData = (char*)dst->data;
-
-	cv::Mat srcHost(srcIpl, true), dstHost(dstIpl, true);
-	cv::gpu::GpuMat srcGpu, dstGpu;
+	dstIpl->imageData = (char*)dst->data;	
 	
-
-	try
-	{
-		srcGpu.upload(srcHost);
-		cv::gpu::Sobel(srcGpu, dstGpu, CV_32F, 1, 0, 5, -1.0);
-		dstGpu.download(dstHost);
-	}
-	catch (cv::Exception e)
-	{
-		std::cout << "Error: " << e.what() << std::endl;
-	}
-	
-	
-	//cvSobel(srcIpl, dstIpl, 1, 0, 5);
-	//cvConvertScale(dstIpl, dstIpl, -1);
-
-		
-	/*static const int tpl[5][5] =	
-	{
-		{1, 2, 0, -2, -1},
-		{4, 8, 0, -8, -4},
-		{6, 12, 0, -12, -6},
-		{4, 8, 0, -8, -4},
-		{1, 2, 0, -2, -1}
-	};*/
-
-	/*CvMat* tplMat = cvCreateMat(5, 5, CV_32S);
-	memcpy(tplMat->data.ptr, tpl, 25 * sizeof(int));
-
-	cvFilter2D(srcIpl, dstIpl, tplMat);
-
-	cvReleaseMat(&tplMat);*/
-
-	
-	/*const int tpl_offset = 2;
-
-	for (int i = 0; i < src->header.height; i++)
-	{
-		for (int j = 0; j < src->header.width; j++)
-		{
-			double depthH = 0;
-			for (int ti = 0; ti < 5; ti++)
-			{
-				int neighbor_row = i + ti - tpl_offset;
-				if(neighbor_row < 0 || neighbor_row >= src->header.height)
-					continue;
-
-				for (int tj = 0; tj < 5; tj++)
-				{
-					int neighbor_col = j + tj - tpl_offset;
-					if(neighbor_col < 0 || neighbor_col >= src->header.width)
-						continue;
-
-					ushort srcDepthVal = *ushortValAt(src, neighbor_row, neighbor_col);
-					//depthH += tpl[ti][tj] * srcDepthVal;
-					depthH += tpl[ti][tj] * (srcDepthVal == 0 ? _settings.maxDepthValue : srcDepthVal);
-				}
-			}
-
-			*floatValAt(dst, i, j) = depthH;
-		}
-	}*/
+	cvSobel(srcIpl, dstIpl, 1, 0, 5);
+	cvConvertScale(dstIpl, dstIpl, -1);
 }
 
 void _iseDetectorConvertProjectiveToRealWorld(int x, int y, int depth, double* rx, double* ry, double* rz)
@@ -221,6 +162,7 @@ double _iseDetectorGetSquaredDistanceInRealWorld(int x1, int y1, int depth1, int
 
 void _iseDetectorFindStrips(const IseDepthFrame* depthPtr, const IseSobelFrame* sobelPtr, IseRgbFrame* debugPtr, vector<vector<OmniTouchStrip> >* strips)
 {
+	strips->clear();
 	for (int i = 0; i < _settings.depthHeight; i++)
 	{
 		strips->push_back(vector<OmniTouchStrip>());
@@ -319,6 +261,7 @@ void _iseDetectorFindFingers(const IseDepthFrame* depthPtr, IseRgbFrame* debugPt
 	/*in*/ vector<vector<OmniTouchStrip> >* strips, 
 	/*out*/ vector<OmniTouchFinger>* fingers)
 {
+	fingers->clear();
 	vector<OmniTouchStrip*> stripBuffer;	//used to fill back
 
 	for (int i = 0; i < _settings.depthHeight; i++)
@@ -580,6 +523,10 @@ int iseDetectorInitWithSettings(const IseCommonSettings* settings)
 	//allocate memory for flood test visited flag
 	_floodHitTestVisitedFlag = (uchar*)malloc(settings->depthWidth * settings->depthHeight);
 
+	//init vectors
+	_strips.reserve(_settings.depthHeight);
+	_fingers.reserve(ISE_MAX_FINGER_NUM);
+
 	return 0;
 }
 
@@ -601,29 +548,26 @@ IseFingerDetectionResults iseDetectorDetect(const IseRgbFrame* rgbFrame, const I
 	memset(debugFrame->data, 0, debugFrame->header.dataBytes);	//set debug frame to black
 
 	_iseDetectorSobel(depthFrame, &_adjustedDepthFrame, &_sobelFrame);
-
-	vector<vector<OmniTouchStrip> > strips;
-	_iseDetectorFindStrips(depthFrame, &_sobelFrame, debugFrame, &strips);
-
-	vector<OmniTouchFinger> fingers;
-	_iseDetectorFindFingers(depthFrame, debugFrame, &strips, &fingers);
-	_iseDetectorFloodHitTest(depthFrame, debugFrame, &fingers);
-
+	
+	_iseDetectorFindStrips(depthFrame, &_sobelFrame, debugFrame, &_strips);
+	_iseDetectorFindFingers(depthFrame, debugFrame, &_strips, &_fingers);
+	_iseDetectorFloodHitTest(depthFrame, debugFrame, &_fingers);
+	
 	_iseDetectorRefineDebugImage(&_sobelFrame, debugFrame);
 
 	IseFingerDetectionResults r;
 
 	r.error = 0;
-	r.fingerCount = fingers.size() < ISE_MAX_FINGER_NUM ? fingers.size() : ISE_MAX_FINGER_NUM;
+	r.fingerCount = _fingers.size() < ISE_MAX_FINGER_NUM ? _fingers.size() : ISE_MAX_FINGER_NUM;
 	for (int i = 0; i < r.fingerCount; i++)
 	{
-		r.fingers[i].tipX = fingers[i].tipX;
-		r.fingers[i].tipY = fingers[i].tipY;
-		r.fingers[i].tipZ = fingers[i].tipZ;
-		r.fingers[i].endX = fingers[i].endX;
-		r.fingers[i].endY = fingers[i].endY;
-		r.fingers[i].endZ = fingers[i].endZ;
-		r.fingers[i].isOnSurface = fingers[i].isOnSurface ? 1 : 0;
+		r.fingers[i].tipX = _fingers[i].tipX;
+		r.fingers[i].tipY = _fingers[i].tipY;
+		r.fingers[i].tipZ = _fingers[i].tipZ;
+		r.fingers[i].endX = _fingers[i].endX;
+		r.fingers[i].endY = _fingers[i].endY;
+		r.fingers[i].endZ = _fingers[i].endZ;
+		r.fingers[i].isOnSurface = _fingers[i].isOnSurface ? 1 : 0;
 	}
 
 	return r;
