@@ -1,8 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include <Windows.h> //for timer
-
 #include "DataTypes.h"
 #include "KinectSimulator.h"
 #include "Detector.h"
@@ -11,12 +9,14 @@
 #include <GL/glew.h>
 #include <gl/GL.h>
 #include <GL/freeglut.h>
+#include <opencv2\opencv.hpp>
+using namespace cv;
+using namespace ise;
 
-static IseCommonSettings _settings;
-static IseRgbFrame _rgbFrame;
-static IseDepthFrame _depthFrame;
-static IseRgbFrame _debugFrame;
-static GLuint _bufferObj;
+static CommonSettings _settings;
+static cv::Mat _rgbFrame, _depthFrame, _debugFrame;
+static KinectSimulator* _kinectSimulator;
+static Detector* _detector;
 
 void glutDisplay()
 {
@@ -24,7 +24,7 @@ void glutDisplay()
 	static int fpsStartTime = 0;
 	static int fpsCurrTime = 0;
 
-	if (iseKinectCapture() == ERROR_KINECT_EOF)
+    if (_kinectSimulator->capture() == KinectSimulator::ERROR_KINECT_EOF)
 	{
 		glutLeaveMainLoop();
 		return;
@@ -33,7 +33,7 @@ void glutDisplay()
 	//rgbFrameIpl->imageData = (char*)rgbFrame.data;
 	//cvShowImage(windowName, rgbFrameIpl);
 
-	iseDetectorDetect(&_rgbFrame, &_depthFrame, &_debugFrame);
+    _detector->detect();
 
 	//opengl draw
 	glClear(GL_COLOR_BUFFER_BIT);
@@ -59,21 +59,18 @@ int main(int argc, char** argv)
 
 	//load settings
 	loadCommonSettings(pathPrefix, &_settings);
-	IseDynamicParameters dynamicParams;
+	DynamicParameters dynamicParams;
 	loadDynamicParameters(pathPrefix, &dynamicParams);
 
 	//init rgb/depth frame
-	_rgbFrame.header = iseCreateImageHeader(_settings.rgbWidth, _settings.rgbHeight, 3);
-	_depthFrame.header = iseCreateImageHeader(_settings.depthWidth, _settings.depthHeight, sizeof(ushort));
-
-	//allocate debug frame
-	_debugFrame.header = iseCreateImageHeader(_settings.depthWidth, _settings.depthHeight, 3, 1);
-	_debugFrame.data = (uchar*)malloc(_debugFrame.header.dataBytes);
+	_rgbFrame.create(_settings.rgbHeight, _settings.rgbWidth, CV_8UC3);
+	_depthFrame.create(_settings.depthHeight, _settings.depthWidth, CV_16U);
+	_debugFrame.create(_settings.depthHeight, _settings.depthWidth, CV_8UC3);
 
 	//init simulator and detector
-	iseKinectInitWithSettings(&_settings, pathPrefix, &_rgbFrame, &_depthFrame);
-	iseDetectorInitWithSettings(&_settings);
-	iseDetectorUpdateDynamicParameters(&dynamicParams);
+    _kinectSimulator = new KinectSimulator(_settings, pathPrefix, _rgbFrame, _depthFrame);
+	_detector = new Detector(_settings, _rgbFrame, _depthFrame, _debugFrame);
+    _detector->updateDynamicParameters(dynamicParams);
 
 	//init glut
 	glutInit(&argc, argv);
@@ -93,12 +90,15 @@ int main(int argc, char** argv)
 	glutMainLoop();	
 
 	//release resources
-	iseDetectorRelease();
-	iseKinectRelease();
+	delete _detector;
+    _detector = NULL;
 
-	free(_debugFrame.data);
-	_debugFrame.data = NULL;
-	_debugFrame.header.isDataOwner = 0;
+	delete _kinectSimulator;
+    _kinectSimulator = NULL;
+
+	_rgbFrame.release();
+	_depthFrame.release();
+	_debugFrame.release();
 
 	return 0;
 }

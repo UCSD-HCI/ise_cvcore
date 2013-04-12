@@ -4,7 +4,7 @@
 
 #include "DataTypes.h"
 
-int loadCommonSettings(const char* pathPrefix, IseCommonSettings* settings);
-int loadDynamicParameters(const char* pathPrefix, IseDynamicParameters* params);
+int loadCommonSettings(const char* pathPrefix, ise::CommonSettings* settings);
+int loadDynamicParameters(const char* pathPrefix, ise::DynamicParameters* params);
 
 #endif

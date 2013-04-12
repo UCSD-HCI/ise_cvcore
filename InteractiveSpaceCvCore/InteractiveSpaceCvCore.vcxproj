@@ -68,7 +68,6 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="DataTypes.cpp" />
     <ClCompile Include="Detector.cpp" />
     <ClCompile Include="KinectSimulator.cpp" />
     <ClCompile Include="main.cpp" />

@@ -3,17 +3,38 @@
 #define ISE_KINECT_SIMULATOR_H
 
 #include "DataTypes.h"
+#include <opencv2\opencv.hpp>
 
-#define ERROR_KINECT_EOF -10
+namespace ise
+{
 
-//The caller is responsible to create proper header for rgbFrameBuffer and depthFrameBuffer. If dataCopy == 1, the caller should also allocate memory for the data field. 
-//dataCopy: if set true, then caller should allocate memory for rgbFrame->data and depthFrame->data, and the frames would be copied.
-//if set false, then the data pointer will be pointed to an internal memory area. 
-int iseKinectInitWithSettings(const IseCommonSettings* settings, const char* recFilePrefix, IseRgbFrame* rgbFrameBuffer, IseDepthFrame* depthFrameBuffer, int dataCopy = 0);
+    class KinectSimulator
+    {
+    private:
+        
+        //passed by from the caller. KinectSimulator won't release them. 
+        cv::Mat& _rgbFrame;
+        cv::Mat& _depthFrame;
 
-//read the next rgb/depth frames and store them in the buffers specified in initWithSettings
-int iseKinectCapture();
+        const CommonSettings& _settings;
 
-int iseKinectRelease();
+        FILE* _depthFp;
+        cv::VideoCapture _rgbCapture;
+
+        int _currentFrame;
+        int _frameCount;
+
+    public:
+        static const int ERROR_KINECT_EOF = -10;
+
+        KinectSimulator(const CommonSettings& settings, const char* recFilePrefix, cv::Mat& rgbFrameBuffer, cv::Mat& depthFrameBuffer);
+
+        //read the next rgb/depth frames and store them in the buffers specified in initWithSettings
+        int capture();
+
+        ~KinectSimulator();
+    };
+
+}
 
 #endif

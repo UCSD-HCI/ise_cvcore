@@ -1,45 +1,22 @@
 #include "KinectSimulator.h"
 
-#include <cv.h>
+#include <opencv2\opencv.hpp>
 #include <highgui.h>
 #include <stdio.h>
+using namespace cv;
+using namespace ise;
 
-static IplImage* _rgbFrameIpl;
-static IplImage* _depthFrameIpl;
-
-//passed by from the caller. KinectSimulator won't release them. 
-static IseRgbFrame* _rgbFrame;
-static IseDepthFrame* _depthFrame;
-static int _dataCopy;
-
-static FILE* _depthFp;
-static CvCapture* _rgbCapture;
-
-static int _currentFrame;
-static int _frameCount;
-
-int iseKinectInitWithSettings(const IseCommonSettings* settings, const char* recFilePrefix, IseRgbFrame* rgbFrameBuffer, IseDepthFrame* depthFrameBuffer, int dataCopy)
+KinectSimulator::KinectSimulator(const CommonSettings& settings, const char* recFilePrefix, Mat& rgbFrameBuffer, Mat& depthFrameBuffer)
+    : _settings(settings), _rgbFrame(rgbFrameBuffer), _depthFrame(depthFrameBuffer), _currentFrame(0)
 {
-	_rgbFrameIpl = cvCreateImage(cvSize(settings->rgbWidth, settings->rgbHeight), IPL_DEPTH_8U, 3);
-	_depthFrameIpl = cvCreateImage(cvSize(settings->depthWidth, settings->depthHeight), IPL_DEPTH_16U, 1);
-	
-	_rgbFrame = rgbFrameBuffer;
-	_depthFrame = depthFrameBuffer;
-	_dataCopy = dataCopy;
-	
-	if (!_dataCopy)
-	{
-		//just point the data pointer in rgb/depth frame to the data in rgb/depth ipl frame.
-		_rgbFrame->data = (uchar*)_rgbFrameIpl->imageData;
-		_depthFrame->data = (ushort*)_depthFrameIpl->imageData;
-	}
+    assert(_depthFrame.isContinuous());
 
 	//open rgb capture
 	char path[255];
 	sprintf(path, "%s.rgb.avi", recFilePrefix);
-	_rgbCapture = cvCaptureFromAVI(path);
-	_frameCount = (int)cvGetCaptureProperty(_rgbCapture, CV_CAP_PROP_FRAME_COUNT);
-
+    _rgbCapture.open(path);
+    _frameCount = (int)_rgbCapture.get(CV_CAP_PROP_FRAME_COUNT);
+	
 	sprintf(path, "%s.depth.bin", recFilePrefix);
 	_depthFp = fopen(path, "rb");
 
@@ -48,51 +25,36 @@ int iseKinectInitWithSettings(const IseCommonSettings* settings, const char* rec
 	int sz = ftell(_depthFp);
 	fseek(_depthFp, 0L, SEEK_SET);
 
-	int depthFrameCount = sz / (_depthFrameIpl->imageSize);
+    int depthFrameCount = sz / (_settings.depthWidth * _settings.depthHeight * sizeof(ushort));
 	if (depthFrameCount < _frameCount)
 	{
 		_frameCount = depthFrameCount;
 	}
-
-	_currentFrame = 0;
-
-	return 0;
 }
 
-int iseKinectCapture()
+int KinectSimulator::capture()
 {
-	if (_dataCopy)
-	{
-		//TODO: implement
-		assert(0);
-	}
-
 	if (_currentFrame >= _frameCount)
 	{
 		return ERROR_KINECT_EOF;
 	}
 
-	IplImage* frame = cvQueryFrame(_rgbCapture);
-	cvCvtColor(frame, _rgbFrameIpl, CV_BGR2RGB);
-	//cvCopy(frame, _rgbFrameIpl);
-
-	fread(_depthFrameIpl->imageData, _depthFrameIpl->imageSize, 1, _depthFp);
+    _rgbCapture >> _rgbFrame;
+    
+    //We can do this on GPU
+    //cvtColor(_rgbFrame, _rgbFrame, CV_BGR2RGB);
+    
+    //_depthFrame must be continuous. Checked in constructor
+    fread(_depthFrame.data, sizeof(ushort), _settings.depthWidth * _settings.depthHeight, _depthFp);
 
 	_currentFrame++;
 
 	return 0;
 }
 
-int iseKinectRelease()
+KinectSimulator::~KinectSimulator()
 {
-	cvReleaseCapture(&_rgbCapture);
 	fclose(_depthFp);
 
-	cvReleaseImage(&_rgbFrameIpl);
-	cvReleaseImage(&_depthFrameIpl);
-
-	_rgbFrame->data = NULL;
-	_depthFrame->data = NULL;
-
-	return 0;
+    //_rgbCapture released by its destructor
 }
