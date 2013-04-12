@@ -7,6 +7,10 @@
 #include <deque>
 #include <algorithm>
 
+#include <cv.h>
+#include <opencv2\opencv.hpp>
+#include <opencv2\gpu\gpu.hpp>
+
 //for debug
 //#include "DebugUtils.h"
 //#include <math.h>
@@ -15,8 +19,9 @@ using namespace std;
 
 //#define byteValAt(imgPtr, row, col) ((byte*)((imgPtr)->imageData + (row) * (imgPtr)->widthStep + col))
 #define ushortValAt(imgPtr, row, col) ((imgPtr)->data + (row) * (imgPtr)->header.width + (col))
-#define intValAt(imgPtr, row, col) ((imgPtr)->data + (row) * (imgPtr)->header.width + (col))
+//#define intValAt(imgPtr, row, col) ((imgPtr)->data + (row) * (imgPtr)->header.width + (col))
 #define rgb888ValAt(imgPtr, row, col) ((imgPtr)->data + (row) * (imgPtr)->header.width * 3 + (col) * 3)
+#define floatValAt(imgPtr, row, col) ((imgPtr)->data + (row) * (imgPtr)->header.width + (col))
 
 typedef enum
 {
@@ -51,6 +56,7 @@ typedef struct __IseIntPoint3D
 static IseCommonSettings _settings;
 static IseDynamicParameters _parameters;
 static IseSobelFrame _sobelFrame;
+static IseDepthFrame _adjustedDepthFrame;
 static int _maxHistogramSize;
 static int* _histogram;
 static uchar* _floodHitTestVisitedFlag;
@@ -109,18 +115,64 @@ void _iseHistEqualize(const IseDepthFrame* depthFrame, IseRgbFrame* debugFrame)
 	free(depthHistogram);
 }
 
-void _iseDetectorSobel(const IseDepthFrame* src, IseSobelFrame* dst)
+void _iseDetectorSobel(const IseDepthFrame* src, IseDepthFrame* adjustedSrc, IseSobelFrame* dst)
 {
-	static const double tpl[5][5] =	
+	memcpy(adjustedSrc->data, src->data, src->header.dataBytes);
+	//change 0 value to max
+	ushort* p = adjustedSrc->data;
+	ushort* pEnd = adjustedSrc->data + (_settings.depthWidth * _settings.depthHeight);
+	for ( ; p <= pEnd; ++p)
+	{
+		if (*p == 0)
+		{
+			*p = _settings.maxDepthValue;
+		}
+	}
+
+	IplImage* srcIpl = cvCreateImageHeader(cvSize(_settings.depthWidth, _settings.depthHeight), IPL_DEPTH_16U, 1);
+	IplImage* dstIpl = cvCreateImageHeader(cvSize(_settings.depthWidth, _settings.depthHeight), IPL_DEPTH_32F, 1);
+	
+	srcIpl->imageData = (char*)adjustedSrc->data;
+	dstIpl->imageData = (char*)dst->data;
+
+	cv::Mat srcHost(srcIpl, true), dstHost(dstIpl, true);
+	cv::gpu::GpuMat srcGpu, dstGpu;
+	
+
+	try
+	{
+		srcGpu.upload(srcHost);
+		cv::gpu::Sobel(srcGpu, dstGpu, CV_32F, 1, 0, 5, -1.0);
+		dstGpu.download(dstHost);
+	}
+	catch (cv::Exception e)
+	{
+		std::cout << "Error: " << e.what() << std::endl;
+	}
+	
+	
+	//cvSobel(srcIpl, dstIpl, 1, 0, 5);
+	//cvConvertScale(dstIpl, dstIpl, -1);
+
+		
+	/*static const int tpl[5][5] =	
 	{
 		{1, 2, 0, -2, -1},
 		{4, 8, 0, -8, -4},
 		{6, 12, 0, -12, -6},
 		{4, 8, 0, -8, -4},
 		{1, 2, 0, -2, -1}
-	};
+	};*/
 
-	const int tpl_offset = 2;
+	/*CvMat* tplMat = cvCreateMat(5, 5, CV_32S);
+	memcpy(tplMat->data.ptr, tpl, 25 * sizeof(int));
+
+	cvFilter2D(srcIpl, dstIpl, tplMat);
+
+	cvReleaseMat(&tplMat);*/
+
+	
+	/*const int tpl_offset = 2;
 
 	for (int i = 0; i < src->header.height; i++)
 	{
@@ -145,9 +197,9 @@ void _iseDetectorSobel(const IseDepthFrame* src, IseSobelFrame* dst)
 				}
 			}
 
-			*intValAt(dst, i, j) = (int)(depthH + 0.5);
+			*floatValAt(dst, i, j) = depthH;
 		}
-	}
+	}*/
 }
 
 void _iseDetectorConvertProjectiveToRealWorld(int x, int y, int depth, double* rx, double* ry, double* rz)
@@ -178,7 +230,7 @@ void _iseDetectorFindStrips(const IseDepthFrame* depthPtr, const IseSobelFrame* 
 		int partialMinPos, partialMaxPos;
 		for (int j = 0; j < _settings.depthWidth; j++)
 		{
-			int currVal = *intValAt(sobelPtr, i, j);
+			int currVal = *floatValAt(sobelPtr, i, j);
 
 			switch(state)
 			{
@@ -446,7 +498,7 @@ void _iseDetectorRefineDebugImage(const IseSobelFrame* sobelPtr, IseRgbFrame* ds
 	{
 		for (int j = 0; j < sobelPtr->header.width; j++)
 		{
-			int h = (int)abs(*intValAt(sobelPtr, i, j));
+			int h = (int)abs(*floatValAt(sobelPtr, i, j));
 			if (h > max) max = h;
 			if (h < min) min = h;
 		}
@@ -462,7 +514,7 @@ void _iseDetectorRefineDebugImage(const IseSobelFrame* sobelPtr, IseRgbFrame* ds
 	{
 		for (int j = 0; j < sobelPtr->header.width; j++)
 		{
-			int h = (int)abs(*intValAt(sobelPtr, i, j));
+			int h = (int)abs(*floatValAt(sobelPtr, i, j));
 			_histogram[h - histogramOffset]++;
 		}
 	}
@@ -490,7 +542,7 @@ void _iseDetectorRefineDebugImage(const IseSobelFrame* sobelPtr, IseRgbFrame* ds
 			} 
 			else
 			{
-				int depth = *intValAt(sobelPtr, i, j);
+				int depth = *floatValAt(sobelPtr, i, j);
 				if (depth >= 0)
 				{
 					dstPixel[0] = 0;
@@ -513,9 +565,13 @@ int iseDetectorInitWithSettings(const IseCommonSettings* settings)
 	_settings = *settings;
 	//on device: upload settings to device memory
 
+	//init adjusted depth
+	_adjustedDepthFrame.header = iseCreateImageHeader(settings->depthWidth, settings->depthHeight, sizeof(ushort), 1);
+	_adjustedDepthFrame.data = (ushort*)malloc(_adjustedDepthFrame.header.dataBytes);
+
 	//init sobel
-	_sobelFrame.header = iseCreateImageHeader(settings->depthWidth, settings->depthHeight, sizeof(int), 1);
-	_sobelFrame.data = (int*)malloc(_sobelFrame.header.dataBytes);
+	_sobelFrame.header = iseCreateImageHeader(settings->depthWidth, settings->depthHeight, sizeof(float), 1);
+	_sobelFrame.data = (float*)malloc(_sobelFrame.header.dataBytes);
 
 	//init histogram for debug
 	_maxHistogramSize = _settings.maxDepthValue * 48 * 2;
@@ -544,7 +600,7 @@ IseFingerDetectionResults iseDetectorDetect(const IseRgbFrame* rgbFrame, const I
 
 	memset(debugFrame->data, 0, debugFrame->header.dataBytes);	//set debug frame to black
 
-	_iseDetectorSobel(depthFrame, &_sobelFrame);
+	_iseDetectorSobel(depthFrame, &_adjustedDepthFrame, &_sobelFrame);
 
 	vector<vector<OmniTouchStrip> > strips;
 	_iseDetectorFindStrips(depthFrame, &_sobelFrame, debugFrame, &strips);
@@ -578,6 +634,10 @@ int iseDetectorRelease()
 	free(_sobelFrame.data);
 	_sobelFrame.data = NULL;
 	_sobelFrame.header.isDataOwner = 0;
+
+	free(_adjustedDepthFrame.data);
+	_adjustedDepthFrame.data = NULL;
+	_adjustedDepthFrame.header.isDataOwner = 0;
 
 	free(_histogram);
 	free(_floodHitTestVisitedFlag);

@@ -90,7 +90,7 @@ typedef struct _IseDepthFrame
 typedef struct _IseSobelFrame
 {
 	IseImageHeader header;
-	int* data;
+	float* data;
 } IseSobelFrame;
 
 typedef struct _IseFingerDetectionResults
