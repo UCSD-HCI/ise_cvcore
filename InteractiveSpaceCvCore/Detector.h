@@ -63,6 +63,8 @@ namespace ise
         cv::Mat _sobelFrame;
         cv::gpu::GpuMat _sobelFrameGpu;
 
+        cv::Mat _debugSobelEqualizedFrame;
+
         inline ushort* ushortValAt(cv::Mat& mat, int row, int col);
         inline const ushort* ushortValAt(const cv::Mat& mat, int row, int col);
         inline float* floatValAt(cv::Mat& mat, int row, int col);

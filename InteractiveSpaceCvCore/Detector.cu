@@ -29,7 +29,7 @@ using namespace ise;
 //#define floatValAt(imgPtr, row, col) ((imgPtr)->data + (row) * (imgPtr)->header.width + (col))
 
 //declare textures
-texture<ushort, 2> texDepth;
+//texture<ushort, 2> texDepth;
 //texture<float, 2> texSobel;
 
 Detector::Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, const cv::Mat& depthFrame, cv::Mat& debugFrame)
@@ -37,7 +37,8 @@ Detector::Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, cons
     _rgbFrameGpu(settings.rgbHeight, settings.rgbWidth, CV_8UC3),
     _depthFrameGpu(settings.depthHeight, settings.depthWidth, CV_16U),
     _sobelFrame(settings.depthHeight, settings.depthWidth, CV_32F),
-    _sobelFrameGpu(settings.depthHeight, settings.depthWidth, CV_32F)
+    _sobelFrameGpu(settings.depthHeight, settings.depthWidth, CV_32F),
+    _debugSobelEqualizedFrame(settings.depthHeight, settings.depthWidth, CV_8U)
 {
 	//on device: upload settings to device memory
 
@@ -45,10 +46,10 @@ Detector::Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, cons
     gpu::registerPageLocked(_sobelFrame);
 
     //bind texture
-    cudaChannelFormatDesc desc = cudaCreateChannelDesc<ushort>();
-    gpu::PtrStepSzb ptrStepSz(_depthFrameGpu);
+    //cudaChannelFormatDesc desc = cudaCreateChannelDesc<ushort>();
+    //gpu::PtrStepSzb ptrStepSz(_depthFrameGpu);
 
-    cudaSafeCall(cudaBindTexture2D(NULL, texDepth, ptrStepSz.data, desc, ptrStepSz.cols, ptrStepSz.rows, ptrStepSz.step));
+    //cudaSafeCall(cudaBindTexture2D(NULL, texDepth, ptrStepSz.data, desc, ptrStepSz.cols, ptrStepSz.rows, ptrStepSz.step));
 	
 	//init histogram for debug
 	_maxHistogramSize = _settings.maxDepthValue * 48 * 2;
@@ -105,7 +106,7 @@ FingerDetectionResults Detector::detect()
 
 Detector::~Detector()
 {
-    cudaSafeCall(cudaUnbindTexture(texDepth));
+    //cudaSafeCall(cudaUnbindTexture(texDepth));
     gpu::unregisterPageLocked(_sobelFrame);
 
     delete [] _histogram;
@@ -248,7 +249,6 @@ void Detector::sobel()
     grid.y = divUp(_settings.depthHeight, threads.y);
     adjustDepthKernel<<<grid, threads>>>(_depthFrameGpu);*/
     
-
     cv::gpu::Sobel(_depthFrameGpu, _sobelFrameGpu, CV_32F, 1, 0, 5, -1);
     _sobelFrameGpu.download(_sobelFrame);
 }
@@ -525,66 +525,20 @@ void Detector::floodHitTest()
 
 void Detector::refineDebugImage()
 {
-	
-	//generate histogram
-	int min = 65535, max = 0;
-    
-    assert(_sobelFrame.isContinuous());
-    float* p = (float*)_sobelFrame.datastart;
-    float* pEnd = (float*)_sobelFrame.dataend;
-
-    for (; p < pEnd; ++p)
-    {
-        int h = (int)abs(*p);
-        if (h > 0 && h < _maxHistogramSize)
-        {
-            if (h > max) max = h;
-		    if (h < min) min = h;
-        } //else out-of-range data
-    }
-
-	int histogramSize = max - min + 1;
-	assert(histogramSize < _maxHistogramSize);
-	int histogramOffset = min;
-
-	memset(_histogram, 0, histogramSize * sizeof(int));
-
-    p = (float*)_sobelFrame.datastart;
-    pEnd = (float*)_sobelFrame.dataend;
-
-	for (; p < pEnd; ++p)
-	{
-		int h = (int)abs(*p);
-        if (h > 0 && h < _maxHistogramSize)
-        {
-		    _histogram[h - histogramOffset]++;
-        }
-	}
-
-	for (int i = 1; i < histogramSize; i++)
-	{
-		_histogram[i] += _histogram[i-1];
-	}
-
-    int points = _sobelFrame.size().area();
-	for (int i = 0; i < histogramSize; i++)
-	{
-		_histogram[i] = (int)(256 * ((double)_histogram[i] / (double)points) + 0.5);
-	}
-    
-
     //truncate and eq histogram on sobel
-    /*convertScaleAbs(_sobelFrame, _sobelFrame);
-    threshold(_sobelFrame, _sobelFrame, _maxHistogramSize, _maxHistogramSize, THRESH_TRUNC);
-    equalizeHist(_sobelFrame, _sobelFrame);*/
+
+    //convertScaleAbs uses saturation_cast, which truncates the value
+    convertScaleAbs(_sobelFrame, _debugSobelEqualizedFrame, 256.0 / _maxHistogramSize);
+    equalizeHist(_debugSobelEqualizedFrame, _debugSobelEqualizedFrame);
 
 	//draw the image
     assert(_debugFrame.isContinuous());
     float* sobelPixel = (float*)_sobelFrame.datastart;
+    uchar* debugSobelPixel = (uchar*)_debugSobelEqualizedFrame.datastart;
     uchar* dstPixel = _debugFrame.datastart;
     uchar* dstEnd = _debugFrame.dataend;
 
-	for (; dstPixel < dstEnd; dstPixel += 3, ++sobelPixel)
+    for (; dstPixel < dstEnd; dstPixel += 3, ++sobelPixel, ++debugSobelPixel)
     {
         if (dstPixel[0] == 255 || dstPixel[1] == 255 || dstPixel[2] == 255)
 		{
@@ -592,24 +546,19 @@ void Detector::refineDebugImage()
 		} 
 		else
 		{
-            //dstPixel[1] = (int)*sobelPixel;
-			int depth = (int)*sobelPixel;
-            if (depth == 0 || abs(depth) >= _maxHistogramSize)
-            {
-                continue;
-            }
+            uchar sobelEq = *debugSobelPixel;
+            float sobelVal = (float)*sobelPixel;
 
-			if (depth >= 0)
-			{
-				dstPixel[0] = 0;
-				dstPixel[2] = _histogram[depth - histogramOffset];
-			}
-			else
-			{
-				dstPixel[0] = _histogram[-depth - histogramOffset];
+            if (sobelVal >= 0)
+            {
+                dstPixel[0] = 0;
+				dstPixel[2] = sobelEq;
+            } else 
+            {
+                dstPixel[0] = sobelEq;
 				dstPixel[2] = 0;
-			}
-			dstPixel[1] = 0;
+            }
+            dstPixel[1] = 0;
 		}
     }
 
