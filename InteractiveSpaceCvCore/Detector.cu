@@ -147,64 +147,6 @@ void Detector::cudaSafeCall(cudaError_t err)
     }
 }
 
-/*
-void _iseHistEqualize(const IseDepthFrame* depthFrame, IseRgbFrame* debugFrame)
-{
-	assert(0);	//deprecated
-
-	if (!debugFrame)
-	{
-		return;
-	}
-
-	int nDepth = _settings.maxDepthValue + 1;
-	int* depthHistogram = (int*)malloc(nDepth * sizeof(int));
-	memset(depthHistogram, 0, nDepth * sizeof(int));
-
-    int points = 0;
-	for (int y = 0; y < _settings.depthHeight; ++y)
-	{
-		ushort* ptr = (ushort*)(depthFrame->data + y * _settings.depthWidth);
-		for (int x = 0; x < _settings.depthWidth; ++x, ++ptr)
-		{
-			if (*ptr != 0)
-			{
-				depthHistogram[*ptr]++;
-				points++;
-			}
-		}
-	}
-	
-	//inclusive scan
-	for (int i = 1; i < nDepth; i++)
-    {
-        depthHistogram[i] += depthHistogram[i - 1];
-    }
-
-    if (points > 0)
-    {
-        for (int i = 1; i < nDepth; i++)
-        {
-            depthHistogram[i] = (int)(256 * (1.0f - (depthHistogram[i] / (double)points)));
-		}
-	}
-
-	for (int y = 0; y < _settings.depthHeight; ++y)
-	{
-		ushort* srcPtr = (ushort*)(depthFrame->data + y * _settings.depthWidth);
-		uchar* dstPtr = (uchar*)(debugFrame->data + y * _settings.depthWidth * 3);
-		for (int x = 0; x < _settings.depthWidth; ++x, ++srcPtr, dstPtr += 3)
-		{
-			dstPtr[0] = depthHistogram[*srcPtr];
-			dstPtr[1] = depthHistogram[*srcPtr];
-			dstPtr[2] = depthHistogram[*srcPtr];
-		}
-	}
-
-	free(depthHistogram);
-}
-*/
-
 void Detector::convertProjectiveToRealWorld(int x, int y, int depth, double& rx, double& ry, double& rz)
 {
 	rx = (x / (double)_settings.depthWidth - 0.5) * depth * _settings.kinectIntrinsicParameters.realWorldXToZ;

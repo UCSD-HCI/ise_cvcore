@@ -1,5 +1,7 @@
 *.pdb
 *.vsp
+*.psess
+profilerSession
 
 #Sensitive
 llahdoc_api+
