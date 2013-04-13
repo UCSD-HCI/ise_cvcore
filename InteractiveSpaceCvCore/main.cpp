@@ -9,7 +9,12 @@
 #include <GL/glew.h>
 #include <gl/GL.h>
 #include <GL/freeglut.h>
+
 #include <opencv2\opencv.hpp>
+#include <opencv2\gpu\gpu.hpp>
+#include <cuda_runtime.h>
+
+
 using namespace cv;
 using namespace ise;
 
@@ -55,7 +60,7 @@ void glutDisplay()
 
 int main(int argc, char** argv)
 {
-	const char pathPrefix[] = "C:\\Users\\cuda\\kinect\\record\\rec130408-1700";
+	const char pathPrefix[] = "C:\\Users\\cuda\\kinect\\record\\rec130412-2036";
 
 	//load settings
 	loadCommonSettings(pathPrefix, &_settings);
@@ -66,6 +71,17 @@ int main(int argc, char** argv)
 	_rgbFrame.create(_settings.rgbHeight, _settings.rgbWidth, CV_8UC3);
 	_depthFrame.create(_settings.depthHeight, _settings.depthWidth, CV_16U);
 	_debugFrame.create(_settings.depthHeight, _settings.depthWidth, CV_8UC3);
+
+    try
+    {
+        gpu::registerPageLocked(_rgbFrame);
+        gpu::registerPageLocked(_depthFrame);
+        //gpu::registerPageLocked(_debugFrame);
+    }
+    catch (cv::Exception e)
+    {
+        printf(e.what());
+    }
 
 	//init simulator and detector
     _kinectSimulator = new KinectSimulator(_settings, pathPrefix, _rgbFrame, _depthFrame);
@@ -95,10 +111,16 @@ int main(int argc, char** argv)
 
 	delete _kinectSimulator;
     _kinectSimulator = NULL;
+    
+    gpu::unregisterPageLocked(_depthFrame);
+    gpu::unregisterPageLocked(_rgbFrame);
+    //gpu::unregisterPageLocked(_debugFrame);
 
 	_rgbFrame.release();
 	_depthFrame.release();
 	_debugFrame.release();
+    
+    //system("PAUSE");
 
 	return 0;
 }

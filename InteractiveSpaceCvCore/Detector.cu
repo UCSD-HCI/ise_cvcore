@@ -10,6 +10,9 @@
 #include <cv.h>
 #include <opencv2\opencv.hpp>
 #include <opencv2\gpu\gpu.hpp>
+#include <cuda.h>
+#include <cuda_runtime.h>
+
 
 //for debug
 //#include "DebugUtils.h"
@@ -24,6 +27,91 @@ using namespace ise;
 //#define intValAt(imgPtr, row, col) ((imgPtr)->data + (row) * (imgPtr)->header.width + (col))
 //#define rgb888ValAt(imgPtr, row, col) ((imgPtr)->data + (row) * (imgPtr)->header.width * 3 + (col) * 3)
 //#define floatValAt(imgPtr, row, col) ((imgPtr)->data + (row) * (imgPtr)->header.width + (col))
+
+//declare textures
+texture<ushort, 2> texDepth;
+//texture<float, 2> texSobel;
+
+Detector::Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, const cv::Mat& depthFrame, cv::Mat& debugFrame)
+    : _settings(settings), _rgbFrame(rgbFrame), _depthFrame(depthFrame), _debugFrame(debugFrame),
+    _rgbFrameGpu(settings.rgbHeight, settings.rgbWidth, CV_8UC3),
+    _depthFrameGpu(settings.depthHeight, settings.depthWidth, CV_16U),
+    _sobelFrame(settings.depthHeight, settings.depthWidth, CV_32F),
+    _sobelFrameGpu(settings.depthHeight, settings.depthWidth, CV_32F)
+{
+	//on device: upload settings to device memory
+
+	//init sobel
+    gpu::registerPageLocked(_sobelFrame);
+
+    //bind texture
+    cudaChannelFormatDesc desc = cudaCreateChannelDesc<ushort>();
+    gpu::PtrStepSzb ptrStepSz(_depthFrameGpu);
+
+    cudaSafeCall(cudaBindTexture2D(NULL, texDepth, ptrStepSz.data, desc, ptrStepSz.cols, ptrStepSz.rows, ptrStepSz.step));
+	
+	//init histogram for debug
+	_maxHistogramSize = _settings.maxDepthValue * 48 * 2;
+	_histogram = new int[_maxHistogramSize];
+
+	//allocate memory for flood test visited flag
+	_floodHitTestVisitedFlag = new uchar[_settings.depthWidth * _settings.depthHeight];
+
+	//init vectors
+	_strips.reserve(_settings.depthHeight);
+	_fingers.reserve(ISE_MAX_FINGER_NUM);
+}
+
+//update the parameters used by the algorithm
+void Detector::updateDynamicParameters(const DynamicParameters& parameters)
+{
+	_parameters = parameters;
+	//on device: upload parameters to device memory
+
+}
+
+//the algorithm goes here. The detection algorithm runs per frame. The input is rgbFrame and depthFrame. The output is the return value, and also the debug frame.
+//have a look at main() to learn how to use this.
+FingerDetectionResults Detector::detect()
+{
+	//_iseHistEqualize(depthFrame, debugFrame);
+
+    _debugFrame.setTo(Scalar(0,0,0));	//set debug frame to black, can also done at GPU
+    memset(_floodHitTestVisitedFlag, 0, _settings.depthWidth * _settings.depthHeight);
+
+	sobel();
+    findStrips();
+    findFingers();
+    floodHitTest();
+    refineDebugImage();
+	
+	FingerDetectionResults r;
+
+	r.error = 0;
+	r.fingerCount = _fingers.size() < ISE_MAX_FINGER_NUM ? _fingers.size() : ISE_MAX_FINGER_NUM;
+	for (int i = 0; i < r.fingerCount; i++)
+	{
+		r.fingers[i].tipX = _fingers[i].tipX;
+		r.fingers[i].tipY = _fingers[i].tipY;
+		r.fingers[i].tipZ = _fingers[i].tipZ;
+		r.fingers[i].endX = _fingers[i].endX;
+		r.fingers[i].endY = _fingers[i].endY;
+		r.fingers[i].endZ = _fingers[i].endZ;
+		r.fingers[i].isOnSurface = _fingers[i].isOnSurface ? 1 : 0;
+	}
+
+	return r;
+}
+
+Detector::~Detector()
+{
+    cudaSafeCall(cudaUnbindTexture(texDepth));
+    gpu::unregisterPageLocked(_sobelFrame);
+
+    delete [] _histogram;
+    delete [] _floodHitTestVisitedFlag;
+}
+
 
 const ushort* Detector::ushortValAt(const cv::Mat& mat, int row, int col)
 {
@@ -41,6 +129,21 @@ uchar* Detector::rgb888ValAt(cv::Mat& mat, int row, int col)
 {
     assert(mat.type() == CV_8UC3);
     return (uchar*)(mat.data + row * mat.step + col * 3);
+}
+
+int Detector::divUp(int total, int grain)
+{
+    return (total + grain - 1) / grain;
+}
+
+void Detector::cudaSafeCall(cudaError_t err)
+{
+    //TODO: better handler
+    if (err != 0)
+    {
+        printf(cudaGetErrorString(err));
+        assert(0); 
+    }
 }
 
 /*
@@ -118,21 +221,36 @@ double Detector::getSquaredDistanceInRealWorld(int x1, int y1, int depth1, int x
 	return ((rx1 - rx2) * (rx1 - rx2) + (ry1 - ry2) * (ry1 - ry2) + (rz1 - rz2) * (rz1 - rz2));
 }
 
+/*__global__ void adjustDepthKernel(gpu::PtrStepSzb ptr)
+{
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (x < ptr.cols && y < ptr.rows)
+    {
+        ushort v = tex2D(texDepth, x, y);
+        if (v == 0)
+        {
+            ushort* p = (ushort*)(ptr.data + y * ptr.step + x * sizeof(ushort));
+            *p = 65535; //TODO: avoid hard coding
+        }
+    }
+}*/
+
 void Detector::sobel()
 {
-    _adjustedDepthFrame = _depthFrame.clone();
+    _depthFrameGpu.upload(_depthFrame);
 
-	//change 0 value to max
-    assert(_adjustedDepthFrame.isContinuous());
-    for (ushort* p = (ushort*)_adjustedDepthFrame.datastart; p < (ushort*)_adjustedDepthFrame.dataend; ++p)
-    {
-        if (*p == 0)
-		{
-			*p = _settings.maxDepthValue;
-		}
-    }
+    /*dim3 grid(1, 1);
+    dim3 threads(32, 16);
 
-    cv::Sobel(_adjustedDepthFrame, _sobelFrame, CV_32F, 1, 0, 5, -1);
+    grid.x = divUp(_settings.depthWidth, threads.x);
+    grid.y = divUp(_settings.depthHeight, threads.y);
+    adjustDepthKernel<<<grid, threads>>>(_depthFrameGpu);*/
+    
+
+    cv::gpu::Sobel(_depthFrameGpu, _sobelFrameGpu, CV_32F, 1, 0, 5, -1);
+    _sobelFrameGpu.download(_sobelFrame);
 }
 
 void Detector::findStrips()
@@ -418,8 +536,11 @@ void Detector::refineDebugImage()
     for (; p < pEnd; ++p)
     {
         int h = (int)abs(*p);
-        if (h > max) max = h;
-		if (h < min) min = h;
+        if (h > 0 && h < _maxHistogramSize)
+        {
+            if (h > max) max = h;
+		    if (h < min) min = h;
+        } //else out-of-range data
     }
 
 	int histogramSize = max - min + 1;
@@ -434,7 +555,10 @@ void Detector::refineDebugImage()
 	for (; p < pEnd; ++p)
 	{
 		int h = (int)abs(*p);
-		_histogram[h - histogramOffset]++;
+        if (h > 0 && h < _maxHistogramSize)
+        {
+		    _histogram[h - histogramOffset]++;
+        }
 	}
 
 	for (int i = 1; i < histogramSize; i++)
@@ -447,6 +571,12 @@ void Detector::refineDebugImage()
 	{
 		_histogram[i] = (int)(256 * ((double)_histogram[i] / (double)points) + 0.5);
 	}
+    
+
+    //truncate and eq histogram on sobel
+    /*convertScaleAbs(_sobelFrame, _sobelFrame);
+    threshold(_sobelFrame, _sobelFrame, _maxHistogramSize, _maxHistogramSize, THRESH_TRUNC);
+    equalizeHist(_sobelFrame, _sobelFrame);*/
 
 	//draw the image
     assert(_debugFrame.isContinuous());
@@ -457,96 +587,31 @@ void Detector::refineDebugImage()
 	for (; dstPixel < dstEnd; dstPixel += 3, ++sobelPixel)
     {
         if (dstPixel[0] == 255 || dstPixel[1] == 255 || dstPixel[2] == 255)
+		{
+			//leave as is
+		} 
+		else
+		{
+            //dstPixel[1] = (int)*sobelPixel;
+			int depth = (int)*sobelPixel;
+            if (depth == 0 || abs(depth) >= _maxHistogramSize)
+            {
+                continue;
+            }
+
+			if (depth >= 0)
 			{
-				//leave as is
-			} 
+				dstPixel[0] = 0;
+				dstPixel[2] = _histogram[depth - histogramOffset];
+			}
 			else
 			{
-				int depth = (int)*sobelPixel;
-				if (depth >= 0)
-				{
-					dstPixel[0] = 0;
-					dstPixel[2] = _histogram[depth - histogramOffset];
-				}
-				else
-				{
-					dstPixel[0] = _histogram[-depth - histogramOffset];
-					dstPixel[2] = 0;
-				}
-				dstPixel[1] = 0;
+				dstPixel[0] = _histogram[-depth - histogramOffset];
+				dstPixel[2] = 0;
 			}
+			dstPixel[1] = 0;
+		}
     }
 
 }
 
-Detector::Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, const cv::Mat& depthFrame, cv::Mat& debugFrame)
-    : _settings(settings), _rgbFrame(rgbFrame), _depthFrame(depthFrame), _debugFrame(debugFrame)
-{
-	//on device: upload settings to device memory
-
-	//init adjusted depth
-    _adjustedDepthFrame.create(cvSize(settings.depthWidth, settings.depthHeight), CV_16U);
-	
-	//init sobel
-    _sobelFrame.create(cvSize(settings.depthWidth, settings.depthHeight), CV_32F);
-	
-	//init histogram for debug
-	_maxHistogramSize = _settings.maxDepthValue * 48 * 2;
-	_histogram = new int[_maxHistogramSize];
-
-	//allocate memory for flood test visited flag
-	_floodHitTestVisitedFlag = new uchar[_settings.depthWidth * _settings.depthHeight];
-
-	//init vectors
-	_strips.reserve(_settings.depthHeight);
-	_fingers.reserve(ISE_MAX_FINGER_NUM);
-}
-
-//update the parameters used by the algorithm
-void Detector::updateDynamicParameters(const DynamicParameters& parameters)
-{
-	_parameters = parameters;
-	//on device: upload parameters to device memory
-
-}
-
-//the algorithm goes here. The detection algorithm runs per frame. The input is rgbFrame and depthFrame. The output is the return value, and also the debug frame.
-//have a look at main() to learn how to use this.
-FingerDetectionResults Detector::detect()
-{
-	//_iseHistEqualize(depthFrame, debugFrame);
-
-    _debugFrame.setTo(Scalar(0,0,0));	//set debug frame to black, can also done at GPU
-    memset(_floodHitTestVisitedFlag, 0, _settings.depthWidth * _settings.depthHeight);
-
-	sobel();
-    findStrips();
-    findFingers();
-    floodHitTest();
-    refineDebugImage();
-	
-	FingerDetectionResults r;
-
-	r.error = 0;
-	r.fingerCount = _fingers.size() < ISE_MAX_FINGER_NUM ? _fingers.size() : ISE_MAX_FINGER_NUM;
-	for (int i = 0; i < r.fingerCount; i++)
-	{
-		r.fingers[i].tipX = _fingers[i].tipX;
-		r.fingers[i].tipY = _fingers[i].tipY;
-		r.fingers[i].tipZ = _fingers[i].tipZ;
-		r.fingers[i].endX = _fingers[i].endX;
-		r.fingers[i].endY = _fingers[i].endY;
-		r.fingers[i].endZ = _fingers[i].endZ;
-		r.fingers[i].isOnSurface = _fingers[i].isOnSurface ? 1 : 0;
-	}
-
-	return r;
-}
-
-Detector::~Detector()
-{
-    _sobelFrame.release();
-    _adjustedDepthFrame.release();
-    delete [] _histogram;
-    delete [] _floodHitTestVisitedFlag;
-}

@@ -4,7 +4,9 @@
 
 #include "DataTypes.h"
 #include <opencv2\opencv.hpp>
+#include <opencv2\gpu\gpu.hpp>
 #include <vector>
+#include <driver_types.h>
 
 namespace ise
 {
@@ -44,8 +46,6 @@ namespace ise
 
         CommonSettings _settings;
         DynamicParameters _parameters;
-        cv::Mat _sobelFrame;
-        cv::Mat _adjustedDepthFrame;
         int _maxHistogramSize;
         int* _histogram;
         uchar* _floodHitTestVisitedFlag;
@@ -54,12 +54,23 @@ namespace ise
 
         const cv::Mat& _rgbFrame;
         const cv::Mat& _depthFrame;
-        cv::Mat _debugFrame;
+        cv::Mat& _debugFrame;
+
+        cv::gpu::GpuMat _rgbFrameGpu;
+        cv::gpu::GpuMat _depthFrameGpu;
+        //cv::gpu::GpuMat _debugFrameGpu;   //TODO
+
+        cv::Mat _sobelFrame;
+        cv::gpu::GpuMat _sobelFrameGpu;
 
         inline ushort* ushortValAt(cv::Mat& mat, int row, int col);
         inline const ushort* ushortValAt(const cv::Mat& mat, int row, int col);
         inline float* floatValAt(cv::Mat& mat, int row, int col);
         inline uchar* rgb888ValAt(cv::Mat& mat, int row, int col);
+
+        //TODO: move these to a common h file
+        inline static int divUp(int total, int grain);
+        inline static void cudaSafeCall(cudaError_t err);
         
         void sobel();
         void findStrips();

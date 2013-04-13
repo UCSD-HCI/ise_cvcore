@@ -15,6 +15,8 @@ namespace ise
         //passed by from the caller. KinectSimulator won't release them. 
         cv::Mat& _rgbFrame;
         cv::Mat& _depthFrame;
+        
+        cv::Mat _rgbFrameBuffer;
 
         const CommonSettings& _settings;
 
@@ -27,7 +29,7 @@ namespace ise
     public:
         static const int ERROR_KINECT_EOF = -10;
 
-        KinectSimulator(const CommonSettings& settings, const char* recFilePrefix, cv::Mat& rgbFrameBuffer, cv::Mat& depthFrameBuffer);
+        KinectSimulator(const CommonSettings& settings, const char* recFilePrefix, cv::Mat& rgbFrame, cv::Mat& depthFrame);
 
         //read the next rgb/depth frames and store them in the buffers specified in initWithSettings
         int capture();

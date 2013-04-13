@@ -1,3 +1,6 @@
+*.pdb
+*.vsp
+
 #Sensitive
 llahdoc_api+
 

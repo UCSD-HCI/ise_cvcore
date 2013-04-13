@@ -8,7 +8,7 @@ int loadCommonSettings(const char* pathPrefix, ise::CommonSettings* settings)
 	settings->rgbHeight = 480;
 	settings->depthWidth = 640;
 	settings->depthHeight = 480;
-	settings->maxDepthValue = 65535;
+	settings->maxDepthValue = 4000; //65535;
 
 	char path[255];
 	sprintf(path, "%s.yml", pathPrefix);
