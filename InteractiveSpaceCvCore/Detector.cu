@@ -115,8 +115,8 @@ FingerDetectionResults Detector::detect()
 
     _debugFrameGpu.download(_debugFrame);
 
-    //findFingers();
-    //floodHitTest();
+    findFingers();
+    floodHitTest();
     refineDebugImage();
     
 	FingerDetectionResults r;
@@ -342,24 +342,26 @@ __global__ void findStripsKernel(gpu::PtrStepb debugPtr, _OmniTouchStripDev* res
 	} //for 
 
     //the first row stores count for each column
-    resultPtr[row].start = 1;   
+    //resultPtr[row].start = 1;   //this field unused
     resultPtr[row].end = stripCount[row];
 
     __syncthreads();
     //map-recude to find the maximum strip count
-    int mid = (blockDim.x + 1) / 2;    //div up
-    do 
+    int total = blockDim.x;
+    //int mid = (blockDim.x + 1) / 2;    //div up
+    while (total > 1) 
     {
+        int mid = (total + 1) / 2;
         if (row < mid)
         {
-            if ( (row + mid < blockDim.x) && stripCount[row + mid] > stripCount[row] ) 
+            if ( (row + mid < total) && stripCount[row + mid] > stripCount[row] ) 
             {
                 stripCount[row] = stripCount[row + mid];
             }
         }
         __syncthreads();
-        mid = (mid + 1) / 2;    //div up
-    } while (mid > 1);
+        total = mid;
+    } 
 
     if (row == 0)
     {
@@ -377,7 +379,7 @@ void Detector::findStrips()
     cudaSafeCall(cudaMemcpyFromSymbol(&_maxStripRowCount, maxStripRowCount, sizeof(int)));
 
     //download effective data, there are maxStripCount + 1 rows. The extra row stores count of strips for each column
-    cudaSafeCall(cudaMemcpy(_stripsHost, _stripsDev, _maxStripRowCount * _settings.depthHeight * sizeof(int), cudaMemcpyDeviceToHost));
+    cudaSafeCall(cudaMemcpy(_stripsHost, _stripsDev, _maxStripRowCount * _settings.depthHeight * sizeof(_OmniTouchStripDev), cudaMemcpyDeviceToHost));
 
     //TODO: according to profiler, this trick seems not necessary. consider optimize for coelesence? 
 }
@@ -386,6 +388,19 @@ void Detector::findFingers()
 {
 	_fingers.clear();
 	vector<OmniTouchStrip*> stripBuffer;	//used to fill back
+
+    //convert data
+    _strips.clear();
+    for (int i = 0; i < _settings.depthHeight; i++)
+    {
+        _strips.push_back(vector<OmniTouchStrip>());
+        int stripCount = _stripsHost[i].end;
+        _OmniTouchStripDev* p = _stripsHost + _settings.depthHeight + i;
+        for (int j = 1; j < stripCount; ++j, p += _settings.depthHeight)
+        {
+            _strips[i].push_back(OmniTouchStrip(i, p->start, p->end));
+        }
+    }
 
 	for (int i = 0; i < _settings.depthHeight; i++)
 	{
