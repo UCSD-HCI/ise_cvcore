@@ -40,9 +40,22 @@ namespace ise
 	    int x, y, z;
     } _IntPoint3D;	//for hit test queue
 
+    typedef struct __FloatPoint3D
+    {
+        float x, y, z;
+    } _FloatPoint3D;
+
+    typedef struct __OmniTouchStripDev
+    {
+        int start;
+        int end;
+    } _OmniTouchStripDev;
+
     class Detector
     {
     private:
+
+        static const int MAX_STRIPS_PER_ROW = 128;
 
         CommonSettings _settings;
         DynamicParameters _parameters;
@@ -56,14 +69,18 @@ namespace ise
         const cv::Mat& _depthFrame;
         cv::Mat& _debugFrame;
 
+        cv::Mat _sobelFrame;
+        cv::Mat _debugSobelEqualizedFrame;
+
+        int _maxStripRowCount; //maximum strip count (+1 for count of each column) of a row in the current frame
+        _OmniTouchStripDev* _stripsHost;
+
+        //gpu variables
         cv::gpu::GpuMat _rgbFrameGpu;
         cv::gpu::GpuMat _depthFrameGpu;
-        //cv::gpu::GpuMat _debugFrameGpu;   //TODO
-
-        cv::Mat _sobelFrame;
+        cv::gpu::GpuMat _debugFrameGpu;   
         cv::gpu::GpuMat _sobelFrameGpu;
-
-        cv::Mat _debugSobelEqualizedFrame;
+        _OmniTouchStripDev* _stripsDev;
 
         inline ushort* ushortValAt(cv::Mat& mat, int row, int col);
         inline const ushort* ushortValAt(const cv::Mat& mat, int row, int col);
@@ -74,7 +91,7 @@ namespace ise
         inline static int divUp(int total, int grain);
         inline static void cudaSafeCall(cudaError_t err);
         
-        void sobel();
+        inline void sobel();
         void findStrips();
         void findFingers();
         void floodHitTest();

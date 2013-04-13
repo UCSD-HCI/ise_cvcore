@@ -22,15 +22,12 @@ using namespace std;
 using namespace cv;
 using namespace ise;
 
-//#define byteValAt(imgPtr, row, col) ((byte*)((imgPtr)->imageData + (row) * (imgPtr)->widthStep + col))
-//#define ushortValAt(imgPtr, row, col) ((imgPtr)->data + (row) * (imgPtr)->header.width + (col))
-//#define intValAt(imgPtr, row, col) ((imgPtr)->data + (row) * (imgPtr)->header.width + (col))
-//#define rgb888ValAt(imgPtr, row, col) ((imgPtr)->data + (row) * (imgPtr)->header.width * 3 + (col) * 3)
-//#define floatValAt(imgPtr, row, col) ((imgPtr)->data + (row) * (imgPtr)->header.width + (col))
-
 //declare textures
-//texture<ushort, 2> texDepth;
-//texture<float, 2> texSobel;
+texture<ushort, 2> texDepth;
+texture<float, 2> texSobel;
+
+__constant__ CommonSettings _settingsDev[1];
+__constant__ DynamicParameters _dynamicParametersDev[1];
 
 Detector::Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, const cv::Mat& depthFrame, cv::Mat& debugFrame)
     : _settings(settings), _rgbFrame(rgbFrame), _depthFrame(depthFrame), _debugFrame(debugFrame),
@@ -38,19 +35,22 @@ Detector::Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, cons
     _depthFrameGpu(settings.depthHeight, settings.depthWidth, CV_16U),
     _sobelFrame(settings.depthHeight, settings.depthWidth, CV_32F),
     _sobelFrameGpu(settings.depthHeight, settings.depthWidth, CV_32F),
-    _debugSobelEqualizedFrame(settings.depthHeight, settings.depthWidth, CV_8U)
+    _debugSobelEqualizedFrame(settings.depthHeight, settings.depthWidth, CV_8U),
+    _debugFrameGpu(settings.depthHeight, settings.depthWidth, CV_8UC3)
 {
 	//on device: upload settings to device memory
+    cudaSafeCall(cudaMemcpyToSymbol(_settingsDev, &settings, sizeof(CommonSettings)));
 
 	//init sobel
     gpu::registerPageLocked(_sobelFrame);
 
-    //bind texture
-    //cudaChannelFormatDesc desc = cudaCreateChannelDesc<ushort>();
-    //gpu::PtrStepSzb ptrStepSz(_depthFrameGpu);
+    //init gpu memory for storing strips
+    //trips for each row of the depth image are stored in each column of _stripsDev. 
+    //The tranpose is to minimize the downloading. 
+    //TODO: might destroy coalesced access. What's the tradeoff?
+    cudaSafeCall(cudaMallocHost(&_stripsHost, (MAX_STRIPS_PER_ROW + 1) * settings.depthHeight * sizeof(_OmniTouchStripDev)));
+    cudaSafeCall(cudaMalloc(&_stripsDev, (MAX_STRIPS_PER_ROW + 1) * settings.depthHeight * sizeof(_OmniTouchStripDev)));
 
-    //cudaSafeCall(cudaBindTexture2D(NULL, texDepth, ptrStepSz.data, desc, ptrStepSz.cols, ptrStepSz.rows, ptrStepSz.step));
-	
 	//init histogram for debug
 	_maxHistogramSize = _settings.maxDepthValue * 48 * 2;
 	_histogram = new int[_maxHistogramSize];
@@ -63,12 +63,23 @@ Detector::Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, cons
 	_fingers.reserve(ISE_MAX_FINGER_NUM);
 }
 
+Detector::~Detector()
+{
+    cudaSafeCall(cudaFree(_stripsDev));
+    cudaSafeCall(cudaFreeHost(_stripsHost));
+    gpu::unregisterPageLocked(_sobelFrame);
+
+    delete [] _histogram;
+    delete [] _floodHitTestVisitedFlag;
+}
+
 //update the parameters used by the algorithm
 void Detector::updateDynamicParameters(const DynamicParameters& parameters)
 {
 	_parameters = parameters;
-	//on device: upload parameters to device memory
-
+	
+    //on device: upload parameters to device memory
+    cudaSafeCall(cudaMemcpyToSymbol(_dynamicParametersDev, &parameters, sizeof(DynamicParameters)));
 }
 
 //the algorithm goes here. The detection algorithm runs per frame. The input is rgbFrame and depthFrame. The output is the return value, and also the debug frame.
@@ -77,15 +88,37 @@ FingerDetectionResults Detector::detect()
 {
 	//_iseHistEqualize(depthFrame, debugFrame);
 
-    _debugFrame.setTo(Scalar(0,0,0));	//set debug frame to black, can also done at GPU
+    //_debugFrame.setTo(Scalar(0,0,0));	//set debug frame to black, can also done at GPU
+    _debugFrameGpu.setTo(Scalar(0,0,0));
+
     memset(_floodHitTestVisitedFlag, 0, _settings.depthWidth * _settings.depthHeight);
 
+    _depthFrameGpu.upload(_depthFrame);
 	sobel();
+    _sobelFrameGpu.download(_sobelFrame);
+
+    //bind sobel for following usage
+    cudaChannelFormatDesc desc = cudaCreateChannelDesc<float>();
+    gpu::PtrStepSzb ptrStepSz(_sobelFrameGpu);
+    cudaSafeCall(cudaBindTexture2D(NULL, texSobel, ptrStepSz.data, desc, ptrStepSz.cols, ptrStepSz.rows, ptrStepSz.step));
+
+    //bind depth
+    cudaChannelFormatDesc descDepth = cudaCreateChannelDesc<ushort>();
+    gpu::PtrStepSzb ptrStepSzDepth(_depthFrameGpu);
+    cudaSafeCall(cudaBindTexture2D(NULL, texDepth, ptrStepSzDepth.data, descDepth, ptrStepSzDepth.cols, ptrStepSzDepth.rows, ptrStepSzDepth.step));
+
     findStrips();
-    findFingers();
-    floodHitTest();
+
+    //unbind textures
+    cudaSafeCall(cudaUnbindTexture(texSobel));
+    cudaSafeCall(cudaUnbindTexture(texDepth));
+
+    _debugFrameGpu.download(_debugFrame);
+
+    //findFingers();
+    //floodHitTest();
     refineDebugImage();
-	
+    
 	FingerDetectionResults r;
 
 	r.error = 0;
@@ -102,15 +135,6 @@ FingerDetectionResults Detector::detect()
 	}
 
 	return r;
-}
-
-Detector::~Detector()
-{
-    //cudaSafeCall(cudaUnbindTexture(texDepth));
-    gpu::unregisterPageLocked(_sobelFrame);
-
-    delete [] _histogram;
-    delete [] _floodHitTestVisitedFlag;
 }
 
 
@@ -142,7 +166,7 @@ void Detector::cudaSafeCall(cudaError_t err)
     //TODO: better handler
     if (err != 0)
     {
-        printf(cudaGetErrorString(err));
+        printf("%s\n", cudaGetErrorString(err));
         assert(0); 
     }
 }
@@ -182,114 +206,180 @@ double Detector::getSquaredDistanceInRealWorld(int x1, int y1, int depth1, int x
 
 void Detector::sobel()
 {
-    _depthFrameGpu.upload(_depthFrame);
-
     /*dim3 grid(1, 1);
     dim3 threads(32, 16);
 
     grid.x = divUp(_settings.depthWidth, threads.x);
     grid.y = divUp(_settings.depthHeight, threads.y);
     adjustDepthKernel<<<grid, threads>>>(_depthFrameGpu);*/
-    
     cv::gpu::Sobel(_depthFrameGpu, _sobelFrameGpu, CV_32F, 1, 0, 5, -1);
-    _sobelFrameGpu.download(_sobelFrame);
+}
+
+__device__ _FloatPoint3D convertProjectiveToRealWorld(_IntPoint3D p)
+{
+    _FloatPoint3D r;
+    r.x = (p.x / (float)_settingsDev[0].depthWidth - 0.5f) * p.z * _settingsDev[0].kinectIntrinsicParameters.realWorldXToZ;
+    r.y = (0.5f - p.y / (float)_settingsDev[0].depthHeight) * p.z * _settingsDev[0].kinectIntrinsicParameters.realWorldYToZ;
+    r.z = p.z / 100.0f * _settingsDev[0].kinectIntrinsicParameters.depthSlope + _settingsDev[0].kinectIntrinsicParameters.depthIntercept;
+
+    return r;
+}
+
+__device__ float getSquaredDistanceInRealWorld(_IntPoint3D p1, _IntPoint3D p2)
+{
+    _FloatPoint3D rp1, rp2;
+
+    rp1 = convertProjectiveToRealWorld(p1);
+	rp2 = convertProjectiveToRealWorld(p2);
+
+    return ((rp1.x - rp2.x) * (rp1.x - rp2.x) + (rp1.y - rp2.y) * (rp1.y - rp2.y) + (rp1.z - rp2.z) * (rp1.z - rp2.z));
+}
+
+__device__ int maxStripRowCount;
+
+__global__ void findStripsKernel(gpu::PtrStepb debugPtr, _OmniTouchStripDev* resultPtr)
+{
+    extern __shared__ int stripCount[];
+    int row = threadIdx.x;
+
+    stripCount[row] = 1;
+	StripState state = StripSmooth;
+	int partialMin, partialMax;
+	int partialMinPos, partialMaxPos;
+
+	for (int col = 0; col < _settingsDev[0].depthWidth; col++)
+	{
+		float currVal = tex2D(texSobel, col, row);
+        
+        
+		switch(state)
+		{
+		case StripSmooth:	//TODO: smooth
+			if (currVal > _dynamicParametersDev[0].omniTouchParam.fingerRisingThreshold)
+			{
+				partialMax = currVal;
+				partialMaxPos = col;
+				state = StripRising;
+			}
+			break;
+
+		case StripRising:
+			if (currVal > _dynamicParametersDev[0].omniTouchParam.fingerRisingThreshold)
+			{
+				if (currVal > partialMax)
+				{
+					partialMax = currVal;
+					partialMaxPos = col;
+				}
+			}
+			else 
+			{
+				state = StripMidSmooth;
+			}
+			break;
+
+		case StripMidSmooth:
+			if (currVal < -_dynamicParametersDev[0].omniTouchParam.fingerFallingThreshold)
+			{
+				partialMin = currVal;
+				partialMinPos = col;
+				state = StripFalling;
+			}
+			else if (currVal > _dynamicParametersDev[0].omniTouchParam.fingerRisingThreshold)
+			{
+				//previous trial faied, start over
+				partialMax = currVal;
+				partialMaxPos = col;
+				state = StripRising;
+			}
+			break;
+
+		case StripFalling:
+			if (currVal < -_dynamicParametersDev[0].omniTouchParam.fingerFallingThreshold)
+			{
+				if (currVal < partialMin)
+				{
+					partialMin = currVal;
+					partialMinPos = col;
+				}
+			}
+			else
+			{
+                ushort depth = tex2D(texDepth, (partialMaxPos + partialMinPos) / 2, row);
+				
+                _IntPoint3D p1, p2;
+                p1.x = partialMaxPos;
+                p1.y = row;
+                p1.z = depth;
+                p2.x = partialMinPos;
+                p2.y = row;
+                p2.z = depth;
+
+				float distSquared = getSquaredDistanceInRealWorld(p1, p2);
+
+				if (distSquared >= _dynamicParametersDev[0].omniTouchParam.fingerWidthMin * _dynamicParametersDev[0].omniTouchParam.fingerWidthMin 
+					&& distSquared <= _dynamicParametersDev[0].omniTouchParam.fingerWidthMax * _dynamicParametersDev[0].omniTouchParam.fingerWidthMax)
+				{
+					for (int tj = partialMaxPos; tj <= partialMinPos; tj++)
+					{
+                        uchar* pixel = debugPtr.data + row * debugPtr.step + tj * 3;
+						pixel[1] = 255;
+					}
+
+                    int resultOffset = stripCount[row] * _settingsDev[0].depthHeight + row;
+                    resultPtr[resultOffset].start = partialMaxPos;
+                    resultPtr[resultOffset].end = partialMinPos;
+                    stripCount[row]++;
+
+					partialMax = currVal;
+					partialMaxPos = col;
+				}
+
+				state = StripSmooth;
+			}
+			break;
+		} //switch 
+	} //for 
+
+    //the first row stores count for each column
+    resultPtr[row].start = 1;   
+    resultPtr[row].end = stripCount[row];
+
+    __syncthreads();
+    //map-recude to find the maximum strip count
+    int mid = (blockDim.x + 1) / 2;    //div up
+    do 
+    {
+        if (row < mid)
+        {
+            if ( (row + mid < blockDim.x) && stripCount[row + mid] > stripCount[row] ) 
+            {
+                stripCount[row] = stripCount[row + mid];
+            }
+        }
+        __syncthreads();
+        mid = (mid + 1) / 2;    //div up
+    } while (mid > 1);
+
+    if (row == 0)
+    {
+        maxStripRowCount = stripCount[0];
+    }
 }
 
 void Detector::findStrips()
 {
-	_strips.clear();
-	for (int i = 0; i < _settings.depthHeight; i++)
-	{
-		_strips.push_back(vector<OmniTouchStrip>());
+    //TODO: what if maximum thread < depthHeight? 
+    //the third params: shared memory size in BYTES
+    findStripsKernel<<<1, _settings.depthHeight, _settings.depthHeight * sizeof(int)>>>(_debugFrameGpu, _stripsDev);
+    cudaSafeCall(cudaGetLastError());
 
-		StripState state = StripSmooth;
-		int partialMin, partialMax;
-		int partialMinPos, partialMaxPos;
-		for (int j = 0; j < _settings.depthWidth; j++)
-		{
-			int currVal = *floatValAt(_sobelFrame, i, j);
+    cudaSafeCall(cudaMemcpyFromSymbol(&_maxStripRowCount, maxStripRowCount, sizeof(int)));
 
-			switch(state)
-			{
-			case StripSmooth:	//TODO: smooth
-				if (currVal > _parameters.omniTouchParam.fingerRisingThreshold)
-				{
-					partialMax = currVal;
-					partialMaxPos = j;
-					state = StripRising;
-				}
-				break;
+    //download effective data, there are maxStripCount + 1 rows. The extra row stores count of strips for each column
+    cudaSafeCall(cudaMemcpy(_stripsHost, _stripsDev, _maxStripRowCount * _settings.depthHeight * sizeof(int), cudaMemcpyDeviceToHost));
 
-			case StripRising:
-				if (currVal > _parameters.omniTouchParam.fingerRisingThreshold)
-				{
-					if (currVal > partialMax)
-					{
-						partialMax = currVal;
-						partialMaxPos = j;
-					}
-				}
-				else 
-				{
-					state = StripMidSmooth;
-				}
-				break;
-
-			case StripMidSmooth:
-				if (currVal < -_parameters.omniTouchParam.fingerFallingThreshold)
-				{
-					partialMin = currVal;
-					partialMinPos = j;
-					state = StripFalling;
-				}
-				else if (currVal > _parameters.omniTouchParam.fingerRisingThreshold)
-				{
-					//previous trial faied, start over
-					partialMax = currVal;
-					partialMaxPos = j;
-					state = StripRising;
-				}
-				break;
-
-			case StripFalling:
-				if (currVal < -_parameters.omniTouchParam.fingerFallingThreshold)
-				{
-					if (currVal < partialMin)
-					{
-						partialMin = currVal;
-						partialMinPos = j;
-					}
-				}
-				else
-				{
-					ushort depth = *ushortValAt(_depthFrame, i, (partialMaxPos + partialMinPos) / 2);	//use the middle point of the strip to measure depth, assuming it is the center of the finger
-
-					double distSquared = getSquaredDistanceInRealWorld(
-						partialMaxPos, i, depth,
-						partialMinPos, i, depth);
-
-					if (distSquared >= _parameters.omniTouchParam.fingerWidthMin * _parameters.omniTouchParam.fingerWidthMin 
-						&& distSquared <= _parameters.omniTouchParam.fingerWidthMax * _parameters.omniTouchParam.fingerWidthMax)
-					{
-						//DEBUG("dist (" << (partialMaxPos + partialMinPos) / 2 << ", " << i << ", " << depth << "): " << sqrt(distSquared));
-						for (int tj = partialMaxPos; tj <= partialMinPos; tj++)
-						{
-							//bufferPixel(tmpPixelBuffer, i, tj)[0] = 0;
-							rgb888ValAt(_debugFrame, i, tj)[1] = 255;
-							//bufferPixel(tmpPixelBuffer, i, tj)[2] = 0;
-						}
-						_strips[i].push_back(OmniTouchStrip(i, partialMaxPos, partialMinPos));
-						
-						partialMax = currVal;
-						partialMaxPos = j;
-					}
-
-					state = StripSmooth;
-				}
-				break;
-			}
-		}
-	}
+    //TODO: according to profiler, this trick seems not necessary. consider optimize for coelesence? 
 }
 
 void Detector::findFingers()

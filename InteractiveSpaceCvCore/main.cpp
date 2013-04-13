@@ -76,7 +76,7 @@ int main(int argc, char** argv)
     {
         gpu::registerPageLocked(_rgbFrame);
         gpu::registerPageLocked(_depthFrame);
-        //gpu::registerPageLocked(_debugFrame);
+        gpu::registerPageLocked(_debugFrame);
     }
     catch (cv::Exception e)
     {
@@ -114,7 +114,7 @@ int main(int argc, char** argv)
     
     gpu::unregisterPageLocked(_depthFrame);
     gpu::unregisterPageLocked(_rgbFrame);
-    //gpu::unregisterPageLocked(_debugFrame);
+    gpu::unregisterPageLocked(_debugFrame);
 
 	_rgbFrame.release();
 	_depthFrame.release();
