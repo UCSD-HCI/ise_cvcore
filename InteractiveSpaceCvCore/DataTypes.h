@@ -11,7 +11,7 @@ typedef unsigned short ushort;
 
 namespace ise
 {
-    const static int ISE_MAX_FINGER_NUM = 20;
+    const static int ISE_MAX_FINGER_NUM = 64;
 
     //sub-structures
     typedef struct _OmniTouchParameters

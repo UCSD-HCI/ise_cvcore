@@ -54,6 +54,10 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalDependencies>opencv_core245d.lib;opencv_calib3d245d.lib;opencv_highgui245d.lib;opencv_video245d.lib;opencv_ml245d.lib;opencv_legacy245d.lib;opencv_imgproc245d.lib;opencv_gpu245d.lib;freeglut.lib;glew32.lib;cudart.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
+    <CudaCompile>
+      <TargetMachinePlatform>64</TargetMachinePlatform>
+      <CodeGeneration>compute_11,sm_11</CodeGeneration>
+    </CudaCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
@@ -68,6 +72,10 @@
       <OptimizeReferences>true</OptimizeReferences>
       <AdditionalDependencies>opencv_core245.lib;opencv_calib3d245.lib;opencv_highgui245.lib;opencv_video245.lib;opencv_ml245.lib;opencv_legacy245.lib;opencv_imgproc245.lib;opencv_gpu245.lib;freeglut.lib;glew32.lib;cudart.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
+    <CudaCompile>
+      <TargetMachinePlatform>64</TargetMachinePlatform>
+      <CodeGeneration>compute_11,sm_11</CodeGeneration>
+    </CudaCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
     <CudaCompile Include="Detector.cu">

@@ -49,14 +49,23 @@ namespace ise
     {
         int start;
         int end;
+        int row;
     } _OmniTouchStripDev;
+
+    typedef struct __OmniTouchFingerDev
+    {
+        _IntPoint3D tip;
+        _IntPoint3D end;
+        int isOnSurface;
+    } _OmniTouchFingerDev;
 
     class Detector
     {
-    private:
-
+    public:
         static const int MAX_STRIPS_PER_ROW = 128;
+        static const int MAX_FINGER_PIXEL_LENGTH = 128; //in pixels. TODO: compute this from max finger length (in real) 
 
+    private:
         CommonSettings _settings;
         DynamicParameters _parameters;
         int _maxHistogramSize;
@@ -75,12 +84,17 @@ namespace ise
         int _maxStripRowCount; //maximum strip count (+1 for count of each column) of a row in the current frame
         _OmniTouchStripDev* _stripsHost;
 
+        int _fingerCount;
+        _OmniTouchFingerDev* _fingersHost;
+
         //gpu variables
         cv::gpu::GpuMat _rgbFrameGpu;
         cv::gpu::GpuMat _depthFrameGpu;
         cv::gpu::GpuMat _debugFrameGpu;   
         cv::gpu::GpuMat _sobelFrameGpu;
         _OmniTouchStripDev* _stripsDev;
+        _OmniTouchFingerDev* _fingersDev;
+        int* _fingerKeysDev;
 
         inline ushort* ushortValAt(cv::Mat& mat, int row, int col);
         inline const ushort* ushortValAt(const cv::Mat& mat, int row, int col);

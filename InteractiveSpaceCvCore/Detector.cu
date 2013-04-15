@@ -12,6 +12,7 @@
 #include <opencv2\gpu\gpu.hpp>
 #include <cuda.h>
 #include <cuda_runtime.h>
+#include <thrust/sort.h>
 
 
 //for debug
@@ -51,6 +52,11 @@ Detector::Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, cons
     cudaSafeCall(cudaMallocHost(&_stripsHost, (MAX_STRIPS_PER_ROW + 1) * settings.depthHeight * sizeof(_OmniTouchStripDev)));
     cudaSafeCall(cudaMalloc(&_stripsDev, (MAX_STRIPS_PER_ROW + 1) * settings.depthHeight * sizeof(_OmniTouchStripDev)));
 
+    //init gpu memory for storing fingers
+    cudaSafeCall(cudaMallocHost(&_fingersHost, ISE_MAX_FINGER_NUM * sizeof(_OmniTouchFingerDev)));
+    cudaSafeCall(cudaMalloc(&_fingersDev, ISE_MAX_FINGER_NUM * sizeof(_OmniTouchFingerDev)));
+    cudaSafeCall(cudaMalloc(&_fingerKeysDev, ISE_MAX_FINGER_NUM * sizeof(int)));
+
 	//init histogram for debug
 	_maxHistogramSize = _settings.maxDepthValue * 48 * 2;
 	_histogram = new int[_maxHistogramSize];
@@ -67,6 +73,11 @@ Detector::~Detector()
 {
     cudaSafeCall(cudaFree(_stripsDev));
     cudaSafeCall(cudaFreeHost(_stripsHost));
+    cudaSafeCall(cudaFree(_fingerKeysDev));
+    
+    cudaSafeCall(cudaFree(_fingersDev));
+    cudaSafeCall(cudaFreeHost(_fingersHost));
+
     gpu::unregisterPageLocked(_sobelFrame);
 
     delete [] _histogram;
@@ -108,6 +119,7 @@ FingerDetectionResults Detector::detect()
     cudaSafeCall(cudaBindTexture2D(NULL, texDepth, ptrStepSzDepth.data, descDepth, ptrStepSzDepth.cols, ptrStepSzDepth.rows, ptrStepSzDepth.step));
 
     findStrips();
+    findFingers();
 
     //unbind textures
     cudaSafeCall(cudaUnbindTexture(texSobel));
@@ -115,7 +127,6 @@ FingerDetectionResults Detector::detect()
 
     _debugFrameGpu.download(_debugFrame);
 
-    findFingers();
     floodHitTest();
     refineDebugImage();
     
@@ -235,7 +246,7 @@ __device__ float getSquaredDistanceInRealWorld(_IntPoint3D p1, _IntPoint3D p2)
     return ((rp1.x - rp2.x) * (rp1.x - rp2.x) + (rp1.y - rp2.y) * (rp1.y - rp2.y) + (rp1.z - rp2.z) * (rp1.z - rp2.z));
 }
 
-__device__ int maxStripRowCount;
+__device__ int maxStripRowCountDev;
 
 __global__ void findStripsKernel(gpu::PtrStepb debugPtr, _OmniTouchStripDev* resultPtr)
 {
@@ -322,13 +333,15 @@ __global__ void findStripsKernel(gpu::PtrStepb debugPtr, _OmniTouchStripDev* res
 				{
 					for (int tj = partialMaxPos; tj <= partialMinPos; tj++)
 					{
-                        uchar* pixel = debugPtr.data + row * debugPtr.step + tj * 3;
+                        //uchar* pixel = debugPtr.data + row * debugPtr.step + tj * 3;
+                        uchar* pixel = debugPtr.ptr(row) + tj * 3;
 						pixel[1] = 255;
 					}
 
                     int resultOffset = stripCount[row] * _settingsDev[0].depthHeight + row;
                     resultPtr[resultOffset].start = partialMaxPos;
                     resultPtr[resultOffset].end = partialMinPos;
+                    resultPtr[resultOffset].row = row;
                     stripCount[row]++;
 
 					partialMax = currVal;
@@ -339,6 +352,11 @@ __global__ void findStripsKernel(gpu::PtrStepb debugPtr, _OmniTouchStripDev* res
 			}
 			break;
 		} //switch 
+
+        if (stripCount[row] > Detector::MAX_STRIPS_PER_ROW)
+        {
+            break;
+        }
 	} //for 
 
     //the first row stores count for each column
@@ -365,7 +383,7 @@ __global__ void findStripsKernel(gpu::PtrStepb debugPtr, _OmniTouchStripDev* res
 
     if (row == 0)
     {
-        maxStripRowCount = stripCount[0];
+        maxStripRowCountDev = stripCount[0];
     }
 }
 
@@ -376,65 +394,84 @@ void Detector::findStrips()
     findStripsKernel<<<1, _settings.depthHeight, _settings.depthHeight * sizeof(int)>>>(_debugFrameGpu, _stripsDev);
     cudaSafeCall(cudaGetLastError());
 
-    cudaSafeCall(cudaMemcpyFromSymbol(&_maxStripRowCount, maxStripRowCount, sizeof(int)));
+    cudaSafeCall(cudaMemcpyFromSymbol(&_maxStripRowCount, maxStripRowCountDev, sizeof(int)));
 
     //download effective data, there are maxStripCount + 1 rows. The extra row stores count of strips for each column
-    cudaSafeCall(cudaMemcpy(_stripsHost, _stripsDev, _maxStripRowCount * _settings.depthHeight * sizeof(_OmniTouchStripDev), cudaMemcpyDeviceToHost));
+    //cudaSafeCall(cudaMemcpy(_stripsHost, _stripsDev, _maxStripRowCount * _settings.depthHeight * sizeof(_OmniTouchStripDev), cudaMemcpyDeviceToHost));
 
     //TODO: according to profiler, this trick seems not necessary. consider optimize for coelesence? 
 }
 
-void Detector::findFingers()
-{
-	_fingers.clear();
-	vector<OmniTouchStrip*> stripBuffer;	//used to fill back
+__device__ int fingerCountDev;
 
-    //convert data
-    _strips.clear();
-    for (int i = 0; i < _settings.depthHeight; i++)
+__global__ void findFingersKernel(gpu::PtrStepb debugPtr, _OmniTouchStripDev* strips, _OmniTouchFingerDev* fingers, int* fingerKeys)
+{
+    extern __shared__ uchar sharedBuffer[];
+
+    int col = threadIdx.x;
+    uchar* visitedFlags = sharedBuffer; //mapping one by one to strips; 1st row unused. 
+    ushort* stripBuffer = (ushort*)(sharedBuffer + _settingsDev[0].depthHeight * (blockDim.x + 1)) 
+        + col * Detector::MAX_FINGER_PIXEL_LENGTH; //offset to the current thread
+    
+    //init visited flags; 
+    uchar* visitedFlagsForCol = visitedFlags + (col + 1) * _settingsDev[0].depthHeight;
+    for (int row = 0; row < _settingsDev[0].depthHeight; row++, visitedFlagsForCol++)
     {
-        _strips.push_back(vector<OmniTouchStrip>());
-        int stripCount = _stripsHost[i].end;
-        _OmniTouchStripDev* p = _stripsHost + _settings.depthHeight + i;
-        for (int j = 1; j < stripCount; ++j, p += _settings.depthHeight)
-        {
-            _strips[i].push_back(OmniTouchStrip(i, p->start, p->end));
-        }
+        *visitedFlagsForCol = 0;
     }
 
-	for (int i = 0; i < _settings.depthHeight; i++)
+    //init global finger count
+    if (col == 0)
+    {
+        fingerCountDev = 0;
+    }
+	
+	for (int row = 0; row < _settingsDev[0].depthHeight; row++)
 	{
-		for (vector<OmniTouchStrip>::iterator it = _strips[i].begin(); it != _strips[i].end(); ++it)
-		{
-			if (it->visited)
+        __syncthreads();
+
+        if (col < strips[row].end - 1)
+        {
+            ushort stripOffset = (col + 1) * _settingsDev[0].depthHeight + row;
+
+			if (visitedFlags[stripOffset] > 0)
 			{
 				continue;
 			}
 
-			stripBuffer.clear();
-			stripBuffer.push_back(&(*it));
-			it->visited = true;
+            stripBuffer[0] = stripOffset;
+            int stripBufferCount = 1;
+            visitedFlags[stripOffset] = 1;
 
 			//search down
 			int blankCounter = 0;
-			for (int si = i; si < _settings.depthHeight; si++)
+			for (int si = row + 1; si < _settingsDev[0].depthHeight; si++)    //algorithm changed. seems to find a bug in original version
 			{
-				OmniTouchStrip* currTop = stripBuffer[stripBuffer.size() - 1];
+				_OmniTouchStripDev* currTop = strips + stripBuffer[stripBufferCount - 1];
 
 				//search strip
 				bool stripFound = false;
-				for (vector<OmniTouchStrip>::iterator sIt = _strips[si].begin(); sIt != _strips[si].end(); ++sIt)
+                
+                int searchDownOffset = _settingsDev[0].depthHeight + si;
+
+                for (int sj = 0; sj < strips[si].end - 1; ++sj, searchDownOffset += _settingsDev[0].depthHeight)
 				{
-					if (sIt->visited)
+					if (visitedFlags[searchDownOffset])
 					{
 						continue;
 					}
 
-					if (sIt->rightCol > currTop->leftCol && sIt->leftCol < currTop->rightCol)	//overlap!
+                    _OmniTouchStripDev* candidate = strips + searchDownOffset;
+
+                    if (candidate->end > currTop->start && candidate->start < currTop->end)	//overlap!
 					{
-						stripBuffer.push_back(&(*sIt));
-						sIt->visited = true;
-						stripFound = true;
+                        stripBuffer[stripBufferCount] = searchDownOffset;
+                        stripBufferCount++;
+
+                        //Note: race condition happens here. But won't generate incorrect results.
+                        visitedFlags[searchDownOffset] = 1;
+						
+                        stripFound = true;
 						break;
 					}
 				}
@@ -442,7 +479,7 @@ void Detector::findFingers()
 				if (!stripFound) //blank
 				{
 					blankCounter++;
-					if (blankCounter > _parameters.omniTouchParam.stripMaxBlankPixel)
+					if (blankCounter > _dynamicParametersDev[0].omniTouchParam.stripMaxBlankPixel)
 					{
 						//Too much blank, give up
 						break;
@@ -451,56 +488,99 @@ void Detector::findFingers()
 			}
 
 			//check length
-			OmniTouchStrip* first = stripBuffer[0];
-			int firstMidCol = (first->leftCol + first->rightCol) / 2;
-			OmniTouchStrip* last = stripBuffer[stripBuffer.size() - 1];
-			int lastMidCol = (last->leftCol + last->rightCol) / 2;
+			_OmniTouchStripDev* first = strips + stripBuffer[0];
+            _OmniTouchStripDev* last = strips + stripBuffer[stripBufferCount - 1];
+            
+            _OmniTouchFingerDev finger;
 
-			ushort depth = *ushortValAt(_depthFrame, (first->row + last->row) / 2, (firstMidCol + lastMidCol) / 2);	//just a try
-						
-			double lengthSquared = getSquaredDistanceInRealWorld(
-				firstMidCol, first->row, depth, // *srcDepth(first->row, firstMidCol),
-				lastMidCol, last->row, depth //*srcDepth(last->row, lastMidCol),
-				);
-			int pixelLength = last->row - first->row +1;
+            //int firstMidCol = (first->start + first->end) / 2;
+            finger.tip.x = (first->start + first->end) / 2;
+            finger.tip.y = first->row;
+			//int lastMidCol = (last->start + last->end) / 2;
+            finger.end.x = (last->start + last->end) / 2;
+            finger.end.y = last->row;
+
+            finger.tip.z = tex2D(texDepth, (finger.tip.x + finger.end.x) / 2, (first->row + last->row) / 2);	//just a try
+            finger.end.z = finger.tip.z;
 			
-			if (pixelLength >= _parameters.omniTouchParam.fingerMinPixelLength 
-				&& lengthSquared >= _parameters.omniTouchParam.fingerLengthMin * _parameters.omniTouchParam.fingerLengthMin 
-				&& lengthSquared <= _parameters.omniTouchParam.fingerLengthMax * _parameters.omniTouchParam.fingerLengthMax)	//finger!
+			float lengthSquared = getSquaredDistanceInRealWorld(finger.tip, finger.end);
+			int pixelLength = finger.end.y - finger.tip.y + 1;
+			
+			if (pixelLength >= _dynamicParametersDev[0].omniTouchParam.fingerMinPixelLength 
+				&& lengthSquared >= _dynamicParametersDev[0].omniTouchParam.fingerLengthMin * _dynamicParametersDev[0].omniTouchParam.fingerLengthMin 
+				&& lengthSquared <= _dynamicParametersDev[0].omniTouchParam.fingerLengthMax * _dynamicParametersDev[0].omniTouchParam.fingerLengthMax)	//finger!
 			{
 				//fill back
 				int bufferPos = -1;
-				for (int row = first->row; row <= last->row; row++)
+				for (int rowFill = first->row; rowFill <= last->row; rowFill++)
 				{
 					int leftCol, rightCol;
-					if (row == stripBuffer[bufferPos + 1]->row)	//find next detected row
+                    _OmniTouchStripDev* nextBufferItem = strips + stripBuffer[bufferPos + 1];
+
+					if (rowFill == nextBufferItem->row)	//find next detected row
 					{
-						bufferPos++;
-						leftCol = stripBuffer[bufferPos]->leftCol;
-						rightCol = stripBuffer[bufferPos]->rightCol;
+                        leftCol = nextBufferItem->start;
+                        rightCol = nextBufferItem->end;
+                        bufferPos++;
 					}
 					else	//in blank area, interpolate
 					{
-						double ratio = (double)(row - stripBuffer[bufferPos]->row) / (double)(stripBuffer[bufferPos + 1]->row - stripBuffer[bufferPos]->row);
-						leftCol = (int)(stripBuffer[bufferPos]->leftCol + (stripBuffer[bufferPos + 1]->leftCol - stripBuffer[bufferPos]->leftCol) * ratio + 0.5);
-						rightCol = (int)(stripBuffer[bufferPos]->rightCol + (stripBuffer[bufferPos + 1]->rightCol - stripBuffer[bufferPos]->rightCol) * ratio + 0.5);
+                        _OmniTouchStripDev* thisBufferItem = strips + stripBuffer[bufferPos];
+
+						float ratio = (float)(rowFill - thisBufferItem->row) / (float)(nextBufferItem->row - thisBufferItem->row);
+                        leftCol = (int)(thisBufferItem->start + (nextBufferItem->start - thisBufferItem->start) * ratio + 0.5f);
+                        rightCol = (int)(thisBufferItem->end + (nextBufferItem->end - thisBufferItem->end) * ratio + 0.5f);
 					}
 
-					for (int col = leftCol; col <= rightCol; col++)
+					for (int colFill = leftCol; colFill <= rightCol; colFill++)
 					{
-						uchar* dstPixel = rgb888ValAt(_debugFrame, row, col);
+                        uchar* dstPixel = debugPtr.ptr(rowFill) + colFill * 3;
 						dstPixel[0] = 255;
-						//bufferPixel(tmpPixelBuffer, row, col)[1] = 255;
 						dstPixel[2] = 255;
 					}
 				}
 
-				_fingers.push_back(OmniTouchFinger(firstMidCol, first->row, depth, lastMidCol, last->row, depth));	//TODO: depth?
-			}
-		}
-	}
+                int currentFingerCount = atomicAdd(&fingerCountDev, 1);
+                fingers[currentFingerCount] = finger;
+                fingerKeys[currentFingerCount] = finger.end.y - finger.tip.y;
+			} // check length
+		
+        }   // if threadIdx.x < strip count
+	} //for each row
 
-	sort(_fingers.begin(), _fingers.end());
+}
+
+
+void Detector::findFingers()
+{
+    int maxStripCount = _maxStripRowCount - 1;  //do not include the first row storing strip count
+    int sharedMemSize = _settings.depthHeight * _maxStripRowCount // visited flags
+                        + MAX_FINGER_PIXEL_LENGTH * maxStripCount * sizeof(ushort); //strip buffer
+
+    assert(sharedMemSize < 49152);  //TODO: read shared memory size from device query; if not large enough, use global memory instead
+
+    findFingersKernel<<<1, maxStripCount, sharedMemSize>>>(_debugFrameGpu, _stripsDev, _fingersDev, _fingerKeysDev);
+    cudaSafeCall(cudaGetLastError());
+
+    cudaSafeCall(cudaMemcpyFromSymbol(&_fingerCount, fingerCountDev, sizeof(int)));
+
+    thrust::device_ptr<int> devKeyPtr = thrust::device_pointer_cast(_fingerKeysDev);
+    thrust::device_ptr<_OmniTouchFingerDev> devFingersPtr = thrust::device_pointer_cast(_fingersDev);
+
+    thrust::sort_by_key(devKeyPtr, devKeyPtr + _fingerCount, devFingersPtr, thrust::greater<int>());
+
+    //convert data
+    cudaSafeCall(cudaMemcpy(_fingersHost, _fingersDev, _fingerCount * sizeof(_OmniTouchFingerDev), cudaMemcpyDeviceToHost));
+    
+
+    _fingers.clear();
+    for (int i = 0; i < _fingerCount; i++)
+    {
+        _OmniTouchFingerDev* f = _fingersHost + i;
+        OmniTouchFinger finger(f->tip.x, f->tip.y, f->tip.z, f->end.x, f->end.y, f->end.z);
+        _fingers.push_back(finger);
+    }
+
 }
 
 void Detector::floodHitTest()
