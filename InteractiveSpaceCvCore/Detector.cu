@@ -12,7 +12,7 @@
 #include <opencv2\gpu\gpu.hpp>
 #include <cuda.h>
 #include <cuda_runtime.h>
-#include <thrust/sort.h>
+//#include <thrust/sort.h>
 
 
 //for debug
@@ -120,16 +120,17 @@ FingerDetectionResults Detector::detect()
 
     findStrips();
     findFingers();
-
+    floodHitTest();
+    
     //unbind textures
     cudaSafeCall(cudaUnbindTexture(texSobel));
     cudaSafeCall(cudaUnbindTexture(texDepth));
 
     _debugFrameGpu.download(_debugFrame);
-
-    floodHitTest();
     refineDebugImage();
     
+    //TODO: sort fingers by CPU
+
 	FingerDetectionResults r;
 
 	r.error = 0;
@@ -535,6 +536,7 @@ __global__ void findFingersKernel(gpu::PtrStepb debugPtr, _OmniTouchStripDev* st
 					for (int colFill = leftCol; colFill <= rightCol; colFill++)
 					{
                         uchar* dstPixel = debugPtr.ptr(rowFill) + colFill * 3;
+                        //uchar* dstPixel = debugPtr.data + rowFill * debugPtr.step + colFill * 3;
 						dstPixel[0] = 255;
 						dstPixel[2] = 255;
 					}
@@ -564,13 +566,13 @@ void Detector::findFingers()
 
     cudaSafeCall(cudaMemcpyFromSymbol(&_fingerCount, fingerCountDev, sizeof(int)));
 
-    thrust::device_ptr<int> devKeyPtr = thrust::device_pointer_cast(_fingerKeysDev);
+    /*thrust::device_ptr<int> devKeyPtr = thrust::device_pointer_cast(_fingerKeysDev);
     thrust::device_ptr<_OmniTouchFingerDev> devFingersPtr = thrust::device_pointer_cast(_fingersDev);
 
-    thrust::sort_by_key(devKeyPtr, devKeyPtr + _fingerCount, devFingersPtr, thrust::greater<int>());
+    thrust::sort_by_key(devKeyPtr, devKeyPtr + _fingerCount, devFingersPtr, thrust::greater<int>());*/
 
     //convert data
-    cudaSafeCall(cudaMemcpy(_fingersHost, _fingersDev, _fingerCount * sizeof(_OmniTouchFingerDev), cudaMemcpyDeviceToHost));
+    /*cudaSafeCall(cudaMemcpy(_fingersHost, _fingersDev, _fingerCount * sizeof(_OmniTouchFingerDev), cudaMemcpyDeviceToHost));
     
 
     _fingers.clear();
@@ -579,13 +581,127 @@ void Detector::findFingers()
         _OmniTouchFingerDev* f = _fingersHost + i;
         OmniTouchFinger finger(f->tip.x, f->tip.y, f->tip.z, f->end.x, f->end.y, f->end.z);
         _fingers.push_back(finger);
+    }*/
+
+}
+
+__global__ void floodHitTestKernel(gpu::PtrStepb debugPtr, _OmniTouchFingerDev* fingers)
+{
+    extern __shared__ uchar prevState[];
+    __shared__ int area;
+    __shared__ int currentLevelHits;
+
+    int currentLevelHitsCopy;
+    int level = 0;
+        
+    if (threadIdx.x == 0)
+    {
+        area = 0;
+        currentLevelHits = 0;
+        prevState[0] = 1;
+    }
+    else
+    {
+        prevState[threadIdx.x] = 0;
     }
 
+    __syncthreads();
+    
+    do
+    {
+        level++;
+
+        bool continuous = false;
+        bool prevFilled = false;
+        //check neighbor's previous state
+                
+        if (threadIdx.x <= level * 2)
+        {
+
+            int x = fingers[blockIdx.x].tip.x;
+            int y = fingers[blockIdx.x].tip.y;
+            int x1, y2;
+
+            if (threadIdx.x % 2 == 0)
+            {
+                x += threadIdx.x / 2;
+                y -= level - (threadIdx.x / 2);
+                x1 = x - 1;
+            }
+            else
+            {
+                x -= (threadIdx.x + 1) / 2;
+                y -= level - (threadIdx.x + 1) / 2;
+                x1 = x + 1;
+            }
+            y2 = y + 1;
+
+            
+            if (x >= 0 && y >= 0 && x < _settingsDev[0].depthWidth && y < _settingsDev[0].depthHeight)
+            {
+                int depth = tex2D(texDepth, x, y);
+                int prevDepth;
+            
+                if (y2 < _settingsDev[0].depthHeight && prevState[threadIdx.x])
+                {
+                    prevDepth = tex2D(texDepth, x, y2);
+                    continuous = (fabsf(depth - prevDepth) < _dynamicParametersDev[0].omniTouchParam.clickFloodMaxGrad);
+                }
+                
+                if (!continuous && threadIdx.x > 0 && x1 >= 0 && x1 < _settingsDev[0].depthWidth &&
+                        (threadIdx.x == 1 ? prevState[0] : prevState[threadIdx.x - 2])
+                    )
+                {
+                    prevDepth = tex2D(texDepth, x1, y);
+                    continuous = (fabsf(depth - prevDepth) < _dynamicParametersDev[0].omniTouchParam.clickFloodMaxGrad);
+                }
+            
+                if (continuous)
+                {
+                    uchar* pixel = debugPtr.ptr(y) + x * 3;
+                    //uchar* pixel = debugPtr.data + y * debugPtr.step + x * 3;
+                    pixel[0] = 255;
+				    pixel[1] = 255;
+				    pixel[2] = 0;
+                    atomicAdd(&currentLevelHits, 1);
+                }
+            }
+
+        } //if prevFilled
+
+        __syncthreads();
+
+        currentLevelHitsCopy = currentLevelHits;
+        prevState[threadIdx.x] = continuous;
+        if (threadIdx.x == 0)
+        {
+            area += currentLevelHits;
+            currentLevelHits = 0;
+        }
+
+        __syncthreads();
+
+    } while (currentLevelHitsCopy && area < _dynamicParametersDev[0].omniTouchParam.clickFloodArea);
+
+    if (threadIdx.x == 0)
+    {
+        fingers[blockIdx.x].isOnSurface = (area >= _dynamicParametersDev[0].omniTouchParam.clickFloodArea);
+    }
 }
 
 void Detector::floodHitTest()
 {
-	static const int neighborOffset[3][2] =
+    if (_fingerCount > 0)
+    {
+        //TODO: bad scalability (when image goes large) and too many syncthreads
+        floodHitTestKernel<<<_fingerCount, 512, 512>>>(_debugFrameGpu, _fingersDev);
+        cudaSafeCall(cudaGetLastError());
+    
+        //download result
+        cudaSafeCall(cudaMemcpy(_fingersHost, _fingersDev, _fingerCount * sizeof(_OmniTouchFingerDev), cudaMemcpyDeviceToHost));
+    }
+
+	/*static const int neighborOffset[3][2] =
 	{
 		{-1, 0},
 		{1, 0},
@@ -646,7 +762,7 @@ void Detector::floodHitTest()
 				break;
 			}
 		}
-	}
+	}*/
 
 }
 

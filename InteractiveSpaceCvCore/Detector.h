@@ -61,7 +61,7 @@ namespace ise
 
     class Detector
     {
-    public:
+    public: 
         static const int MAX_STRIPS_PER_ROW = 128;
         static const int MAX_FINGER_PIXEL_LENGTH = 128; //in pixels. TODO: compute this from max finger length (in real) 
 
