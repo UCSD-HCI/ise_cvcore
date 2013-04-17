@@ -29,6 +29,8 @@ texture<float, 2> texSobel;
 
 __constant__ CommonSettings _settingsDev[1];
 __constant__ DynamicParameters _dynamicParametersDev[1];
+//__constant__ int _floodFillNeighborOffset[6];
+__constant__ int _maxHistogramSizeDev[1];
 
 Detector::Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, const cv::Mat& depthFrame, cv::Mat& debugFrame)
     : _settings(settings), _rgbFrame(rgbFrame), _depthFrame(depthFrame), _debugFrame(debugFrame),
@@ -37,6 +39,7 @@ Detector::Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, cons
     _sobelFrame(settings.depthHeight, settings.depthWidth, CV_32F),
     _sobelFrameGpu(settings.depthHeight, settings.depthWidth, CV_32F),
     _debugSobelEqualizedFrame(settings.depthHeight, settings.depthWidth, CV_8U),
+    _debugSobelEqFrameGpu(settings.depthHeight, settings.depthWidth, CV_8U),
     _debugFrameGpu(settings.depthHeight, settings.depthWidth, CV_8UC3)
 {
 	//on device: upload settings to device memory
@@ -59,13 +62,23 @@ Detector::Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, cons
 
 	//init histogram for debug
 	_maxHistogramSize = _settings.maxDepthValue * 48 * 2;
-	_histogram = new int[_maxHistogramSize];
+    cudaSafeCall(cudaMemcpyToSymbol(_maxHistogramSizeDev, &_maxHistogramSize, sizeof(int)));
+	//_histogram = new int[_maxHistogramSize];
+
+    //init flood fill constant
+    /*const int neighborOffset[3][2] =
+	{
+		{-1, 0},
+		{1, 0},
+		{0, -1}
+	};
+    cudaSafeCall(cudaMemcpyToSymbol(_floodFillNeighborOffset, neighborOffset, 6 * sizeof(int)));*/
 
 	//allocate memory for flood test visited flag
 	_floodHitTestVisitedFlag = new uchar[_settings.depthWidth * _settings.depthHeight];
-
+    
 	//init vectors
-	_strips.reserve(_settings.depthHeight);
+	//_strips.reserve(_settings.depthHeight);
 	_fingers.reserve(ISE_MAX_FINGER_NUM);
 }
 
@@ -80,7 +93,7 @@ Detector::~Detector()
 
     gpu::unregisterPageLocked(_sobelFrame);
 
-    delete [] _histogram;
+    //delete [] _histogram;
     delete [] _floodHitTestVisitedFlag;
 }
 
@@ -120,15 +133,15 @@ FingerDetectionResults Detector::detect()
 
     findStrips();
     findFingers();
+
+    _debugFrameGpu.download(_debugFrame);
+    refineDebugImage();
+
     floodHitTest();
     
     //unbind textures
     cudaSafeCall(cudaUnbindTexture(texSobel));
     cudaSafeCall(cudaUnbindTexture(texDepth));
-
-    _debugFrameGpu.download(_debugFrame);
-    refineDebugImage();
-    
     //TODO: sort fingers by CPU
 
 	FingerDetectionResults r;
@@ -446,7 +459,7 @@ __global__ void findFingersKernel(gpu::PtrStepb debugPtr, _OmniTouchStripDev* st
 
 			//search down
 			int blankCounter = 0;
-			for (int si = row + 1; si < _settingsDev[0].depthHeight; si++)    //algorithm changed. seems to find a bug in original version
+			for (int si = row; si < _settingsDev[0].depthHeight; si++)    //algorithm changed. seems to find a bug in original version
 			{
 				_OmniTouchStripDev* currTop = strips + stripBuffer[stripBufferCount - 1];
 
@@ -572,7 +585,7 @@ void Detector::findFingers()
     thrust::sort_by_key(devKeyPtr, devKeyPtr + _fingerCount, devFingersPtr, thrust::greater<int>());*/
 
     //convert data
-    /*cudaSafeCall(cudaMemcpy(_fingersHost, _fingersDev, _fingerCount * sizeof(_OmniTouchFingerDev), cudaMemcpyDeviceToHost));
+    cudaSafeCall(cudaMemcpy(_fingersHost, _fingersDev, _fingerCount * sizeof(_OmniTouchFingerDev), cudaMemcpyDeviceToHost));
     
 
     _fingers.clear();
@@ -581,10 +594,11 @@ void Detector::findFingers()
         _OmniTouchFingerDev* f = _fingersHost + i;
         OmniTouchFinger finger(f->tip.x, f->tip.y, f->tip.z, f->end.x, f->end.y, f->end.z);
         _fingers.push_back(finger);
-    }*/
+    }
 
 }
 
+/*  //this algorithm is wrong. have to use DFS
 __global__ void floodHitTestKernel(gpu::PtrStepb debugPtr, _OmniTouchFingerDev* fingers)
 {
     extern __shared__ uchar prevState[];
@@ -687,21 +701,164 @@ __global__ void floodHitTestKernel(gpu::PtrStepb debugPtr, _OmniTouchFingerDev* 
     {
         fingers[blockIdx.x].isOnSurface = (area >= _dynamicParametersDev[0].omniTouchParam.clickFloodArea);
     }
-}
+}*/
+
+/*
+__global__ void floodHitTestKernel(gpu::PtrStepb debugPtr, _OmniTouchFingerDev* fingers)
+{
+
+    extern __shared__ _ShortPoint2D dfsQueue[];
+    __shared__ int visitedFlags[Detector::FLOOD_FILL_RADIUS * Detector::FLOOD_FILL_RADIUS * 2 / 32];
+    __shared__ int dfsHead;
+    __shared__ int dfsEnd;
+    __shared__ int area;
+
+    //init data
+    int fingerId = blockIdx.x;
+
+    for (int i = threadIdx.x; i < Detector::FLOOD_FILL_RADIUS * Detector::FLOOD_FILL_RADIUS * 2 / 32; i += blockDim.x)
+    {
+        visitedFlags[i] = 0;
+    }
+
+    if (threadIdx.x == ((Detector::FLOOD_FILL_RADIUS / 32) % blockDim.x))  //use this thread that initialized visitedFlag[FLOOD_FILL_RADIUS / 32] to avoid extra sync
+    {
+        //enque the center
+        dfsQueue[0].x = 0;
+        dfsQueue[0].y = 0;
+
+        dfsHead = 0;
+        dfsEnd = 1;
+        area = 1;
+        visitedFlags[Detector::FLOOD_FILL_RADIUS / 32] = 1;
+    }
+
+    int prevArea = 0;
+
+    while(area > prevArea 
+        && area < _dynamicParametersDev[0].omniTouchParam.clickFloodArea
+        && dfsEnd < 512 //queue is not full TODO: avoid hard coding; use circular buffer
+        && dfsEnd > dfsHead) //queue is not empty
+	{
+        //this sync and the sync at the end of the loop guarantees that all threads have the same evaluation of dfsEnd > dfsHead
+
+        prevArea = area;
+
+        //dispatch
+        int elemIdx = dfsHead + threadIdx.x;
+        if (threadIdx.x == 0)
+        {
+            dfsHead = (dfsEnd < dfsHead + blockDim.x ) ? dfsEnd : (dfsHead + blockDim.x);
+        }
+
+        int prevEnd = dfsEnd;
+
+        __syncthreads();    
+
+        if (elemIdx < prevEnd)
+        {
+
+            int centerRltX = dfsQueue[elemIdx].x;
+            int centerRltY = dfsQueue[elemIdx].y;
+
+            int centerAbsX = fingers[fingerId].tip.x + centerRltX;
+            int centerAbsY = fingers[fingerId].tip.y + centerRltY;
+
+            ushort centerDepth = tex2D(texDepth, centerAbsX, centerAbsY);
+
+		    for (int i = 0; i < 3; i++)
+		    {
+                int dx = _floodFillNeighborOffset[i * 2];
+                int dy = _floodFillNeighborOffset[i * 2 + 1];
+
+                int neighborRltX = centerRltX + dx;
+                int neighborRltY = centerRltY + dy;
+
+                if ( (neighborRltX > 0 ? (neighborRltX >= Detector::FLOOD_FILL_RADIUS) : (neighborRltX <= -Detector::FLOOD_FILL_RADIUS))
+                    || (neighborRltY < -Detector::FLOOD_FILL_RADIUS) )
+                {
+                    //exceed the flood radius
+                    continue;
+                }
+
+                int neighborAbsX = centerAbsX + dx;
+                int neighborAbsY = centerAbsY + dy;
+
+                if (neighborAbsX < 0 || neighborAbsX >= _settingsDev[0].depthWidth || neighborAbsY < 0)
+                {
+                    //exceed the image border
+                    continue;
+                }
+
+                //the bitwise trick
+                int visitedFlagPos = -neighborRltY * (Detector::FLOOD_FILL_RADIUS * 2) + neighborRltX + Detector::FLOOD_FILL_RADIUS;
+                int visitedFlagIdx = visitedFlagPos / 32;
+                int visitedFlagTestBit = 1 << (visitedFlagPos % 32);
+
+                //this check is thread safe because a visited flag will never be cleared once set. 
+                if (visitedFlags[visitedFlagIdx] & visitedFlagTestBit)
+                {
+                    continue;
+                }
+
+			    ushort neiborDepth = tex2D(texDepth, neighborAbsX, neighborAbsY);
+			    if (fabsf((float)neiborDepth - (float)centerDepth) > _dynamicParametersDev[0].omniTouchParam.clickFloodMaxGrad)
+			    {
+				    continue;					
+			    }
+
+
+                //Check visited again. This time we set the flag. If it is a newly set flag, then enque.
+                int prevVisited = atomicOr(&(visitedFlags[visitedFlagIdx]), visitedFlagTestBit);
+
+                if (prevVisited & visitedFlagTestBit)
+                {
+                    continue;
+                }
+
+                uchar* dstPixel = debugPtr.ptr(neighborAbsY) + neighborAbsX * 3;
+			    dstPixel[0] = 255;
+			    dstPixel[1] = 255;
+			    dstPixel[2] = 0;
+
+                //enqueue
+                atomicAdd(&area, 1);
+                int currEnd = atomicAdd(&dfsEnd, 1);
+
+                if (currEnd < 512)  //queue is not full TODO: avoid hard coding
+                {
+                    dfsQueue[currEnd].x = neighborRltX;
+                    dfsQueue[currEnd].y = neighborRltY;
+                }
+		    }   //end for
+        }   //if (currHead < prevEnd)
+
+        __syncthreads();
+	}   //end while
+	
+    if (threadIdx.x == 0)
+    { 
+		if (area >= _dynamicParametersDev[0].omniTouchParam.clickFloodArea)
+		{
+			fingers[fingerId].isOnSurface = 1;
+		}
+    }
+}*/
 
 void Detector::floodHitTest()
 {
-    if (_fingerCount > 0)
+    /*if (_fingerCount > 0)
     {
         //TODO: bad scalability (when image goes large) and too many syncthreads
-        floodHitTestKernel<<<_fingerCount, 512, 512>>>(_debugFrameGpu, _fingersDev);
+        //floodHitTestKernel<<<_fingerCount, 512, 512>>>(_debugFrameGpu, _fingersDev);
+        floodHitTestKernel<<<_fingerCount, 512, 512 * sizeof(_ShortPoint2D)>>>(_debugFrameGpu, _fingersDev);
         cudaSafeCall(cudaGetLastError());
     
         //download result
         cudaSafeCall(cudaMemcpy(_fingersHost, _fingersDev, _fingerCount * sizeof(_OmniTouchFingerDev), cudaMemcpyDeviceToHost));
-    }
+    }*/
 
-	/*static const int neighborOffset[3][2] =
+	static const int neighborOffset[3][2] =
 	{
 		{-1, 0},
 		{1, 0},
@@ -762,35 +919,40 @@ void Detector::floodHitTest()
 				break;
 			}
 		}
-	}*/
+	}
 
 }
 
-void Detector::refineDebugImage()
+__global__ void convertScaleAbsKernel(gpu::PtrStepb debugSobelEqPtr)
 {
-    //truncate and eq histogram on sobel
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
 
-    //convertScaleAbs uses saturation_cast, which truncates the value
-    convertScaleAbs(_sobelFrame, _debugSobelEqualizedFrame, 256.0 / _maxHistogramSize);
-    equalizeHist(_debugSobelEqualizedFrame, _debugSobelEqualizedFrame);
-
-	//draw the image
-    assert(_debugFrame.isContinuous());
-    float* sobelPixel = (float*)_sobelFrame.datastart;
-    uchar* debugSobelPixel = (uchar*)_debugSobelEqualizedFrame.datastart;
-    uchar* dstPixel = _debugFrame.datastart;
-    uchar* dstEnd = _debugFrame.dataend;
-
-    for (; dstPixel < dstEnd; dstPixel += 3, ++sobelPixel, ++debugSobelPixel)
+    if (x < _settingsDev[0].depthWidth && y < _settingsDev[0].depthHeight)
     {
+        float sobel = tex2D(texSobel, x, y);
+        uchar res = (uchar)(fabsf(sobel) / (float)(_maxHistogramSizeDev[0]) * 256.0f + 0.5f);
+        *(debugSobelEqPtr.ptr(y) + x) = res;
+    }
+}
+
+__global__ void refineDebugImageKernel(gpu::PtrStepb debugPtr, gpu::PtrStepb sobelEqPtr)
+{
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (x < _settingsDev[0].depthWidth && y < _settingsDev[0].depthHeight)
+    {
+        uchar* dstPixel = debugPtr.ptr(y) + x * 3;
+
         if (dstPixel[0] == 255 || dstPixel[1] == 255 || dstPixel[2] == 255)
 		{
 			//leave as is
 		} 
 		else
 		{
-            uchar sobelEq = *debugSobelPixel;
-            float sobelVal = (float)*sobelPixel;
+            uchar sobelEq = *(sobelEqPtr.ptr(y) + x);
+            float sobelVal = tex2D(texSobel, x, y);
 
             if (sobelVal >= 0)
             {
@@ -804,6 +966,23 @@ void Detector::refineDebugImage()
             dstPixel[1] = 0;
 		}
     }
+}
+
+void Detector::refineDebugImage()
+{
+    //truncate and eq histogram on sobel
+    dim3 threads(16, 32);
+    dim3 grid(divUp(_settings.depthWidth, threads.x), divUp(_settings.depthHeight, threads.y));
+    convertScaleAbsKernel<<<grid, threads>>>(_debugSobelEqFrameGpu);
+    cudaSafeCall(cudaGetLastError());
+
+    gpu::equalizeHist(_debugSobelEqFrameGpu, _debugSobelEqFrameGpu);
+    
+	//draw the image
+    refineDebugImageKernel<<<grid, threads>>>(_debugFrameGpu, _debugSobelEqFrameGpu);
+    cudaSafeCall(cudaGetLastError());
+    
+    _debugFrameGpu.download(_debugFrame);
 
 }
 

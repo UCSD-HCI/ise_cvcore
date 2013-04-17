@@ -40,6 +40,11 @@ namespace ise
 	    int x, y, z;
     } _IntPoint3D;	//for hit test queue
 
+    typedef struct __ShortPoint2D
+    {
+        short x,y;
+    } _ShortPoint2D; //for dfs queue of flood fill
+
     typedef struct __FloatPoint3D
     {
         float x, y, z;
@@ -64,12 +69,13 @@ namespace ise
     public: 
         static const int MAX_STRIPS_PER_ROW = 128;
         static const int MAX_FINGER_PIXEL_LENGTH = 128; //in pixels. TODO: compute this from max finger length (in real) 
+        static const int FLOOD_FILL_RADIUS = 128;
 
     private:
         CommonSettings _settings;
         DynamicParameters _parameters;
         int _maxHistogramSize;
-        int* _histogram;
+        //int* _histogram;
         uchar* _floodHitTestVisitedFlag;
         std::vector<std::vector<OmniTouchStrip> > _strips;
         std::vector<OmniTouchFinger> _fingers;
@@ -92,6 +98,7 @@ namespace ise
         cv::gpu::GpuMat _depthFrameGpu;
         cv::gpu::GpuMat _debugFrameGpu;   
         cv::gpu::GpuMat _sobelFrameGpu;
+        cv::gpu::GpuMat _debugSobelEqFrameGpu;
         _OmniTouchStripDev* _stripsDev;
         _OmniTouchFingerDev* _fingersDev;
         int* _fingerKeysDev;
