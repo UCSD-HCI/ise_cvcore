@@ -47,41 +47,29 @@ Detector::Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, cons
     //trips for each row of the depth image are stored in each column of _stripsDev. 
     //The tranpose is to minimize the downloading. 
     //TODO: might destroy coalesced access. What's the tradeoff?
+    cudaSafeCall(cudaMallocHost(&_stripsHost, (MAX_STRIPS_PER_ROW + 1) * settings.depthHeight * sizeof(_OmniTouchStripDev)));
     cudaSafeCall(cudaMalloc(&_stripsDev, (MAX_STRIPS_PER_ROW + 1) * settings.depthHeight * sizeof(_OmniTouchStripDev)));
 
-    //init gpu memory for storing fingers
-    cudaSafeCall(cudaMallocHost(&_fingersHost, ISE_MAX_FINGER_NUM * sizeof(_OmniTouchFingerDev)));
-    cudaSafeCall(cudaMalloc(&_fingersDev, ISE_MAX_FINGER_NUM * sizeof(_OmniTouchFingerDev)));
- 
+    //init memory for storing fingers
+    _stripVisitedFlags = new uchar[(MAX_STRIPS_PER_ROW + 1) * settings.depthHeight];
+
 	//init histogram for debug
 	_maxHistogramSize = _settings.maxDepthValue * 48 * 2;
     cudaSafeCall(cudaMemcpyToSymbol(_maxHistogramSizeDev, &_maxHistogramSize, sizeof(int)));
 	
-    //init flood fill constant
-    /*const int neighborOffset[3][2] =
-	{
-		{-1, 0},
-		{1, 0},
-		{0, -1}
-	};
-    cudaSafeCall(cudaMemcpyToSymbol(_floodFillNeighborOffset, neighborOffset, 6 * sizeof(int)));*/
-
 	//allocate memory for flood test visited flag
 	_floodHitTestVisitedFlag = new uchar[_settings.depthWidth * _settings.depthHeight];
     
 	//init vectors
-	//_strips.reserve(_settings.depthHeight);
 	_fingers.reserve(ISE_MAX_FINGER_NUM);
 }
 
 Detector::~Detector()
 {
     cudaSafeCall(cudaFree(_stripsDev));
+    cudaSafeCall(cudaFreeHost(_stripsHost));
     
-    cudaSafeCall(cudaFree(_fingersDev));
-    cudaSafeCall(cudaFreeHost(_fingersHost));
-
-    //delete [] _histogram;
+    delete [] _stripVisitedFlags;
     delete [] _floodHitTestVisitedFlag;
 }
 
@@ -116,15 +104,16 @@ FingerDetectionResults Detector::detect()
     gpu::PtrStepSzb ptrStepSzDepth(_depthFrameGpu);
     cudaSafeCall(cudaBindTexture2D(NULL, texDepth, ptrStepSzDepth.data, descDepth, ptrStepSzDepth.cols, ptrStepSzDepth.rows, ptrStepSzDepth.step));
 
-    findStrips();
-    findFingers();
     refineDebugImage();
-    
+    findStrips();
+
     //unbind textures
     cudaSafeCall(cudaUnbindTexture(texSobel));
     cudaSafeCall(cudaUnbindTexture(texDepth));
     
     _debugFrameGpu.download(_debugFrame);
+
+    findFingers();
     floodHitTest();
 
 	FingerDetectionResults r;
@@ -384,74 +373,60 @@ void Detector::findStrips()
 
 }
 
-__device__ int fingerCountDev;
-
-__global__ void findFingersKernel(gpu::PtrStepb debugPtr, _OmniTouchStripDev* strips, _OmniTouchFingerDev* fingers)
+void Detector::findFingers()
 {
-    extern __shared__ uchar sharedBuffer[];
-
-    int col = threadIdx.x;
-    uchar* visitedFlags = sharedBuffer; //mapping one by one to strips; 1st row unused. 
-    ushort* stripBuffer = (ushort*)(sharedBuffer + _settingsDev[0].depthHeight * (blockDim.x + 1)) 
-        + col * Detector::MAX_FINGER_PIXEL_LENGTH; //offset to the current thread
-    
+    //download strips
+    //download effective data, there are maxStripCount + 1 rows. The extra row stores count of strips for each column
+    cudaSafeCall(cudaMemcpy(_stripsHost, _stripsDev, _maxStripRowCount * _settings.depthHeight * sizeof(_OmniTouchStripDev), cudaMemcpyDeviceToHost));
+    //TODO: according to profiler, this trick seems not necessary. consider optimize for coelesence? 
+  
     //init visited flags; 
-    uchar* visitedFlagsForCol = visitedFlags + (col + 1) * _settingsDev[0].depthHeight;
-    for (int row = 0; row < _settingsDev[0].depthHeight; row++, visitedFlagsForCol++)
-    {
-        *visitedFlagsForCol = 0;
-    }
+    memset(_stripVisitedFlags, 0, _settings.depthHeight * _maxStripRowCount);
 
     //init global finger count
-    if (col == 0)
-    {
-        fingerCountDev = 0;
-    }
+    _fingers.clear();
 	
-	for (int row = 0; row < _settingsDev[0].depthHeight; row++)
+	for (int row = 0; row < _settings.depthHeight; row++)
 	{
-        __syncthreads();
-
-        if (col < strips[row].end - 1)
+        for (int col = 0; col < _stripsHost[row].end - 1; col++)
         {
-            ushort stripOffset = (col + 1) * _settingsDev[0].depthHeight + row;
+            int stripOffset = (col + 1) * _settings.depthHeight + row;
 
-			if (visitedFlags[stripOffset] > 0)
+			if (_stripVisitedFlags[stripOffset] > 0)
 			{
 				continue;
 			}
 
-            stripBuffer[0] = stripOffset;
-            int stripBufferCount = 1;
-            visitedFlags[stripOffset] = 1;
+            _stripBuffer.clear();
+            _stripBuffer.push_back(_stripsHost + stripOffset);
+            _stripVisitedFlags[stripOffset] = 1;
 
 			//search down
 			int blankCounter = 0;
-			for (int si = row; si < _settingsDev[0].depthHeight; si++)    //algorithm changed. seems to find a bug in original version
+			for (int si = row; si < _settings.depthHeight; si++)   
 			{
-				_OmniTouchStripDev* currTop = strips + stripBuffer[stripBufferCount - 1];
+                _OmniTouchStripDev* currTop = _stripBuffer[_stripBuffer.size() - 1];
 
 				//search strip
 				bool stripFound = false;
                 
-                int searchDownOffset = _settingsDev[0].depthHeight + si;
+                int searchDownOffset = _settings.depthHeight + si;
 
-                for (int sj = 0; sj < strips[si].end - 1; ++sj, searchDownOffset += _settingsDev[0].depthHeight)
+                for (int sj = 0; sj < _stripsHost[si].end - 1; ++sj, searchDownOffset += _settings.depthHeight)
 				{
-					if (visitedFlags[searchDownOffset])
+					if (_stripVisitedFlags[searchDownOffset])
 					{
 						continue;
 					}
 
-                    _OmniTouchStripDev* candidate = strips + searchDownOffset;
+                    _OmniTouchStripDev* candidate = _stripsHost + searchDownOffset;
 
                     if (candidate->end > currTop->start && candidate->start < currTop->end)	//overlap!
 					{
-                        stripBuffer[stripBufferCount] = searchDownOffset;
-                        stripBufferCount++;
-
+                        _stripBuffer.push_back(_stripsHost + searchDownOffset);
+                        
                         //Note: race condition happens here. But won't generate incorrect results.
-                        visitedFlags[searchDownOffset] = 1;
+                        _stripVisitedFlags[searchDownOffset] = 1;
 						
                         stripFound = true;
 						break;
@@ -461,7 +436,7 @@ __global__ void findFingersKernel(gpu::PtrStepb debugPtr, _OmniTouchStripDev* st
 				if (!stripFound) //blank
 				{
 					blankCounter++;
-					if (blankCounter > _dynamicParametersDev[0].omniTouchParam.stripMaxBlankPixel)
+					if (blankCounter > _parameters.omniTouchParam.stripMaxBlankPixel)
 					{
 						//Too much blank, give up
 						break;
@@ -470,34 +445,34 @@ __global__ void findFingersKernel(gpu::PtrStepb debugPtr, _OmniTouchStripDev* st
 			}
 
 			//check length
-			_OmniTouchStripDev* first = strips + stripBuffer[0];
-            _OmniTouchStripDev* last = strips + stripBuffer[stripBufferCount - 1];
+			_OmniTouchStripDev* first = _stripBuffer[0];
+            _OmniTouchStripDev* last = _stripBuffer[_stripBuffer.size() - 1];
             
-            _OmniTouchFingerDev finger;
+            OmniTouchFinger finger;
 
             //int firstMidCol = (first->start + first->end) / 2;
-            finger.tip.x = (first->start + first->end) / 2;
-            finger.tip.y = first->row;
+            finger.tipX = (first->start + first->end) / 2;
+            finger.tipY = first->row;
 			//int lastMidCol = (last->start + last->end) / 2;
-            finger.end.x = (last->start + last->end) / 2;
-            finger.end.y = last->row;
+            finger.endX = (last->start + last->end) / 2;
+            finger.endY = last->row;
 
-            finger.tip.z = tex2D(texDepth, (finger.tip.x + finger.end.x) / 2, (first->row + last->row) / 2);	//just a try
-            finger.end.z = finger.tip.z;
+            finger.tipZ = *(ushort*)(_depthFrame.ptr((first->row + last->row) / 2) + (finger.tipX + finger.endX) / 2 * sizeof(ushort));
+            finger.endZ = finger.tipZ;
 			
-			float lengthSquared = getSquaredDistanceInRealWorld(finger.tip, finger.end);
-			int pixelLength = finger.end.y - finger.tip.y + 1;
+            double lengthSquared = getSquaredDistanceInRealWorld(finger.tipX, finger.tipY, finger.tipZ, finger.endX, finger.endY, finger.endZ);
+			int pixelLength = finger.endY - finger.tipY + 1;
 			
-			if (pixelLength >= _dynamicParametersDev[0].omniTouchParam.fingerMinPixelLength 
-				&& lengthSquared >= _dynamicParametersDev[0].omniTouchParam.fingerLengthMin * _dynamicParametersDev[0].omniTouchParam.fingerLengthMin 
-				&& lengthSquared <= _dynamicParametersDev[0].omniTouchParam.fingerLengthMax * _dynamicParametersDev[0].omniTouchParam.fingerLengthMax)	//finger!
+            if (pixelLength >= _parameters.omniTouchParam.fingerMinPixelLength 
+				&& lengthSquared >= _parameters.omniTouchParam.fingerLengthMin * _parameters.omniTouchParam.fingerLengthMin 
+				&& lengthSquared <= _parameters.omniTouchParam.fingerLengthMax * _parameters.omniTouchParam.fingerLengthMax)	//finger!
 			{
 				//fill back
 				int bufferPos = -1;
 				for (int rowFill = first->row; rowFill <= last->row; rowFill++)
 				{
 					int leftCol, rightCol;
-                    _OmniTouchStripDev* nextBufferItem = strips + stripBuffer[bufferPos + 1];
+                    _OmniTouchStripDev* nextBufferItem = _stripBuffer[bufferPos + 1];
 
 					if (rowFill == nextBufferItem->row)	//find next detected row
 					{
@@ -507,7 +482,7 @@ __global__ void findFingersKernel(gpu::PtrStepb debugPtr, _OmniTouchStripDev* st
 					}
 					else	//in blank area, interpolate
 					{
-                        _OmniTouchStripDev* thisBufferItem = strips + stripBuffer[bufferPos];
+                        _OmniTouchStripDev* thisBufferItem = _stripBuffer[bufferPos];
 
 						float ratio = (float)(rowFill - thisBufferItem->row) / (float)(nextBufferItem->row - thisBufferItem->row);
                         leftCol = (int)(thisBufferItem->start + (nextBufferItem->start - thisBufferItem->start) * ratio + 0.5f);
@@ -516,298 +491,22 @@ __global__ void findFingersKernel(gpu::PtrStepb debugPtr, _OmniTouchStripDev* st
 
 					for (int colFill = leftCol; colFill <= rightCol; colFill++)
 					{
-                        uchar* dstPixel = debugPtr.ptr(rowFill) + colFill * 3;
+                        uchar* dstPixel = _debugFrame.ptr(rowFill) + colFill * 3;
                         //uchar* dstPixel = debugPtr.data + rowFill * debugPtr.step + colFill * 3;
 						dstPixel[0] = 255;
 						dstPixel[2] = 255;
 					}
 				}
 
-                int currentFingerCount = atomicAdd(&fingerCountDev, 1);
-                fingers[currentFingerCount] = finger;
+                _fingers.push_back(finger);
 			} // check length
 		
-        }   // if threadIdx.x < strip count
+        }   // for each col
 	} //for each row
 
-}
-
-
-void Detector::findFingers()
-{
-    int maxStripCount = _maxStripRowCount - 1;  //do not include the first row storing strip count
-    int sharedMemSize = _settings.depthHeight * _maxStripRowCount // visited flags
-                        + MAX_FINGER_PIXEL_LENGTH * maxStripCount * sizeof(ushort); //strip buffer
-
-    assert(sharedMemSize < 49152);  //TODO: read shared memory size from device query; if not large enough, use global memory instead
-
-    findFingersKernel<<<1, maxStripCount, sharedMemSize>>>(_debugFrameGpu, _stripsDev, _fingersDev);
-    cudaSafeCall(cudaGetLastError());
-
-    cudaSafeCall(cudaMemcpyFromSymbol(&_fingerCount, fingerCountDev, sizeof(int)));
-
-    //convert data
-    cudaSafeCall(cudaMemcpy(_fingersHost, _fingersDev, _fingerCount * sizeof(_OmniTouchFingerDev), cudaMemcpyDeviceToHost));
-    
-
-    _fingers.clear();
-    for (int i = 0; i < _fingerCount; i++)
-    {
-        _OmniTouchFingerDev* f = _fingersHost + i;
-        OmniTouchFinger finger(f->tip.x, f->tip.y, f->tip.z, f->end.x, f->end.y, f->end.z);
-        _fingers.push_back(finger);
-    }
-
     sort(_fingers.begin(), _fingers.end());
-
 }
 
-/*  //this algorithm is wrong. have to use DFS
-__global__ void floodHitTestKernel(gpu::PtrStepb debugPtr, _OmniTouchFingerDev* fingers)
-{
-    extern __shared__ uchar prevState[];
-    __shared__ int area;
-    __shared__ int currentLevelHits;
-
-    int currentLevelHitsCopy;
-    int level = 0;
-        
-    if (threadIdx.x == 0)
-    {
-        area = 0;
-        currentLevelHits = 0;
-        prevState[0] = 1;
-    }
-    else
-    {
-        prevState[threadIdx.x] = 0;
-    }
-
-    __syncthreads();
-    
-    do
-    {
-        level++;
-
-        bool continuous = false;
-        bool prevFilled = false;
-        //check neighbor's previous state
-                
-        if (threadIdx.x <= level * 2)
-        {
-
-            int x = fingers[blockIdx.x].tip.x;
-            int y = fingers[blockIdx.x].tip.y;
-            int x1, y2;
-
-            if (threadIdx.x % 2 == 0)
-            {
-                x += threadIdx.x / 2;
-                y -= level - (threadIdx.x / 2);
-                x1 = x - 1;
-            }
-            else
-            {
-                x -= (threadIdx.x + 1) / 2;
-                y -= level - (threadIdx.x + 1) / 2;
-                x1 = x + 1;
-            }
-            y2 = y + 1;
-
-            
-            if (x >= 0 && y >= 0 && x < _settingsDev[0].depthWidth && y < _settingsDev[0].depthHeight)
-            {
-                int depth = tex2D(texDepth, x, y);
-                int prevDepth;
-            
-                if (y2 < _settingsDev[0].depthHeight && prevState[threadIdx.x])
-                {
-                    prevDepth = tex2D(texDepth, x, y2);
-                    continuous = (fabsf(depth - prevDepth) < _dynamicParametersDev[0].omniTouchParam.clickFloodMaxGrad);
-                }
-                
-                if (!continuous && threadIdx.x > 0 && x1 >= 0 && x1 < _settingsDev[0].depthWidth &&
-                        (threadIdx.x == 1 ? prevState[0] : prevState[threadIdx.x - 2])
-                    )
-                {
-                    prevDepth = tex2D(texDepth, x1, y);
-                    continuous = (fabsf(depth - prevDepth) < _dynamicParametersDev[0].omniTouchParam.clickFloodMaxGrad);
-                }
-            
-                if (continuous)
-                {
-                    uchar* pixel = debugPtr.ptr(y) + x * 3;
-                    //uchar* pixel = debugPtr.data + y * debugPtr.step + x * 3;
-                    pixel[0] = 255;
-				    pixel[1] = 255;
-				    pixel[2] = 0;
-                    atomicAdd(&currentLevelHits, 1);
-                }
-            }
-
-        } //if prevFilled
-
-        __syncthreads();
-
-        currentLevelHitsCopy = currentLevelHits;
-        prevState[threadIdx.x] = continuous;
-        if (threadIdx.x == 0)
-        {
-            area += currentLevelHits;
-            currentLevelHits = 0;
-        }
-
-        __syncthreads();
-
-    } while (currentLevelHitsCopy && area < _dynamicParametersDev[0].omniTouchParam.clickFloodArea);
-
-    if (threadIdx.x == 0)
-    {
-        fingers[blockIdx.x].isOnSurface = (area >= _dynamicParametersDev[0].omniTouchParam.clickFloodArea);
-    }
-}*/
-
-/*
-__global__ void floodHitTestKernel(gpu::PtrStepb debugPtr, _OmniTouchFingerDev* fingers)
-{
-
-    extern __shared__ _ShortPoint2D dfsQueue[];
-    __shared__ int visitedFlags[Detector::FLOOD_FILL_RADIUS * Detector::FLOOD_FILL_RADIUS * 2 / 32];
-    __shared__ int dfsHead;
-    __shared__ int dfsEnd;
-    __shared__ int area;
-
-    //init data
-    int fingerId = blockIdx.x;
-
-    for (int i = threadIdx.x; i < Detector::FLOOD_FILL_RADIUS * Detector::FLOOD_FILL_RADIUS * 2 / 32; i += blockDim.x)
-    {
-        visitedFlags[i] = 0;
-    }
-
-    if (threadIdx.x == ((Detector::FLOOD_FILL_RADIUS / 32) % blockDim.x))  //use this thread that initialized visitedFlag[FLOOD_FILL_RADIUS / 32] to avoid extra sync
-    {
-        //enque the center
-        dfsQueue[0].x = 0;
-        dfsQueue[0].y = 0;
-
-        dfsHead = 0;
-        dfsEnd = 1;
-        area = 1;
-        visitedFlags[Detector::FLOOD_FILL_RADIUS / 32] = 1;
-    }
-
-    int prevArea = 0;
-
-    while(area > prevArea 
-        && area < _dynamicParametersDev[0].omniTouchParam.clickFloodArea
-        && dfsEnd < 512 //queue is not full TODO: avoid hard coding; use circular buffer
-        && dfsEnd > dfsHead) //queue is not empty
-	{
-        //this sync and the sync at the end of the loop guarantees that all threads have the same evaluation of dfsEnd > dfsHead
-
-        prevArea = area;
-
-        //dispatch
-        int elemIdx = dfsHead + threadIdx.x;
-        if (threadIdx.x == 0)
-        {
-            dfsHead = (dfsEnd < dfsHead + blockDim.x ) ? dfsEnd : (dfsHead + blockDim.x);
-        }
-
-        int prevEnd = dfsEnd;
-
-        __syncthreads();    
-
-        if (elemIdx < prevEnd)
-        {
-
-            int centerRltX = dfsQueue[elemIdx].x;
-            int centerRltY = dfsQueue[elemIdx].y;
-
-            int centerAbsX = fingers[fingerId].tip.x + centerRltX;
-            int centerAbsY = fingers[fingerId].tip.y + centerRltY;
-
-            ushort centerDepth = tex2D(texDepth, centerAbsX, centerAbsY);
-
-		    for (int i = 0; i < 3; i++)
-		    {
-                int dx = _floodFillNeighborOffset[i * 2];
-                int dy = _floodFillNeighborOffset[i * 2 + 1];
-
-                int neighborRltX = centerRltX + dx;
-                int neighborRltY = centerRltY + dy;
-
-                if ( (neighborRltX > 0 ? (neighborRltX >= Detector::FLOOD_FILL_RADIUS) : (neighborRltX <= -Detector::FLOOD_FILL_RADIUS))
-                    || (neighborRltY < -Detector::FLOOD_FILL_RADIUS) )
-                {
-                    //exceed the flood radius
-                    continue;
-                }
-
-                int neighborAbsX = centerAbsX + dx;
-                int neighborAbsY = centerAbsY + dy;
-
-                if (neighborAbsX < 0 || neighborAbsX >= _settingsDev[0].depthWidth || neighborAbsY < 0)
-                {
-                    //exceed the image border
-                    continue;
-                }
-
-                //the bitwise trick
-                int visitedFlagPos = -neighborRltY * (Detector::FLOOD_FILL_RADIUS * 2) + neighborRltX + Detector::FLOOD_FILL_RADIUS;
-                int visitedFlagIdx = visitedFlagPos / 32;
-                int visitedFlagTestBit = 1 << (visitedFlagPos % 32);
-
-                //this check is thread safe because a visited flag will never be cleared once set. 
-                if (visitedFlags[visitedFlagIdx] & visitedFlagTestBit)
-                {
-                    continue;
-                }
-
-			    ushort neiborDepth = tex2D(texDepth, neighborAbsX, neighborAbsY);
-			    if (fabsf((float)neiborDepth - (float)centerDepth) > _dynamicParametersDev[0].omniTouchParam.clickFloodMaxGrad)
-			    {
-				    continue;					
-			    }
-
-
-                //Check visited again. This time we set the flag. If it is a newly set flag, then enque.
-                int prevVisited = atomicOr(&(visitedFlags[visitedFlagIdx]), visitedFlagTestBit);
-
-                if (prevVisited & visitedFlagTestBit)
-                {
-                    continue;
-                }
-
-                uchar* dstPixel = debugPtr.ptr(neighborAbsY) + neighborAbsX * 3;
-			    dstPixel[0] = 255;
-			    dstPixel[1] = 255;
-			    dstPixel[2] = 0;
-
-                //enqueue
-                atomicAdd(&area, 1);
-                int currEnd = atomicAdd(&dfsEnd, 1);
-
-                if (currEnd < 512)  //queue is not full TODO: avoid hard coding
-                {
-                    dfsQueue[currEnd].x = neighborRltX;
-                    dfsQueue[currEnd].y = neighborRltY;
-                }
-		    }   //end for
-        }   //if (currHead < prevEnd)
-
-        __syncthreads();
-	}   //end while
-	
-    if (threadIdx.x == 0)
-    { 
-		if (area >= _dynamicParametersDev[0].omniTouchParam.clickFloodArea)
-		{
-			fingers[fingerId].isOnSurface = 1;
-		}
-    }
-}*/
 
 void Detector::floodHitTest()
 {

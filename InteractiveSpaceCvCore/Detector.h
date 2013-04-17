@@ -22,6 +22,7 @@ namespace ise
     {
 	    int tipX, tipY, tipZ;
 	    int endX, endY, endZ;
+        struct _OmniTouchFinger() { }
 	    struct _OmniTouchFinger(int tipX, int tipY, int tipZ, int endX, int endY, int endZ) : tipX(tipX), tipY(tipY), tipZ(tipZ), endX(endX), endY(endY), endZ(endZ), isOnSurface(false) { }
 	    bool operator<(const _OmniTouchFinger& ref) const { return endY - tipY > ref.endY - ref.tipY; }	//sort more to less
 	    bool isOnSurface;
@@ -49,13 +50,6 @@ namespace ise
         int row;
     } _OmniTouchStripDev;
 
-    typedef struct __OmniTouchFingerDev
-    {
-        _IntPoint3D tip;
-        _IntPoint3D end;
-        int isOnSurface;
-    } _OmniTouchFingerDev;
-
     class Detector
     {
     public: 
@@ -78,7 +72,9 @@ namespace ise
         int _maxStripRowCount; //maximum strip count (+1 for count of each column) of a row in the current frame
  
         int _fingerCount;
-        _OmniTouchFingerDev* _fingersHost;
+        _OmniTouchStripDev* _stripsHost;
+        std::vector<_OmniTouchStripDev*> _stripBuffer;
+        uchar* _stripVisitedFlags;
 
         //gpu variables
         cv::gpu::GpuMat _rgbFrameGpu;
@@ -87,7 +83,6 @@ namespace ise
         cv::gpu::GpuMat _sobelFrameGpu;
         cv::gpu::GpuMat _debugSobelEqFrameGpu;
         _OmniTouchStripDev* _stripsDev;
-        _OmniTouchFingerDev* _fingersDev;
 
         inline ushort* ushortValAt(cv::Mat& mat, int row, int col);
         inline const ushort* ushortValAt(const cv::Mat& mat, int row, int col);
