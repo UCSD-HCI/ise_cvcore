@@ -77,6 +77,8 @@ namespace ise
         uchar* _stripVisitedFlags;
 
         //gpu variables
+        cv::gpu::Stream _gpuStream1;
+        cv::gpu::Stream _gpuStream2;
         cv::gpu::GpuMat _rgbFrameGpu;
         cv::gpu::GpuMat _depthFrameGpu;
         cv::gpu::GpuMat _debugFrameGpu;   

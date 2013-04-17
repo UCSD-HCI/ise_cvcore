@@ -10,6 +10,7 @@
 #include <cv.h>
 #include <opencv2\opencv.hpp>
 #include <opencv2\gpu\gpu.hpp>
+#include <opencv2\gpu\stream_accessor.hpp>
 #include <cuda.h>
 #include <cuda_runtime.h>
 //#include <thrust/sort.h>
@@ -382,11 +383,6 @@ void Detector::findStrips()
 
 void Detector::findFingers()
 {
-    //download strips
-    //download effective data, there are maxStripCount + 1 rows. The extra row stores count of strips for each column
-    cudaSafeCall(cudaMemcpy(_stripsHost, _stripsDev, _maxStripRowCount * _settings.depthHeight * sizeof(_OmniTouchStripDev), cudaMemcpyDeviceToHost));
-    //TODO: according to profiler, this trick seems not necessary. consider optimize for coelesence? 
-  
     //init visited flags; 
     memset(_stripVisitedFlags, 0, _settings.depthHeight * _maxStripRowCount);
 
@@ -601,7 +597,7 @@ __global__ void convertScaleAbsKernel(gpu::PtrStepb debugSobelEqPtr)
     if (x < _settingsDev[0].depthWidth && y < _settingsDev[0].depthHeight)
     {
         float sobel = tex2D(texSobel, x, y);
-        uchar res = (uchar)(fabsf(sobel) / (float)(_maxHistogramSizeDev[0]) * 256.0f + 0.5f);
+        uchar res = (uchar)(fabsf(sobel) / (float)(_maxHistogramSizeDev[0]) * 255.0f + 0.5f);
         *(debugSobelEqPtr.ptr(y) + x) = res;
     }
 }
@@ -660,7 +656,8 @@ void Detector::gpuProcess()
     _debugFrameGpu.setTo(Scalar(0,0,0));
 
     _depthFrameGpu.upload(_depthFrame);
-	sobel();
+	
+    cv::gpu::Sobel(_depthFrameGpu, _sobelFrameGpu, CV_32F, 1, 0, 5, -1);
     
     //bind sobel for following usage
     cudaChannelFormatDesc desc = cudaCreateChannelDesc<float>();
@@ -672,10 +669,47 @@ void Detector::gpuProcess()
     gpu::PtrStepSzb ptrStepSzDepth(_depthFrameGpu);
     cudaSafeCall(cudaBindTexture2D(NULL, texDepth, ptrStepSzDepth.data, descDepth, ptrStepSzDepth.cols, ptrStepSzDepth.rows, ptrStepSzDepth.step));
 
+    cudaStream_t cudaStream1 = gpu::StreamAccessor::getStream(_gpuStream1);
+    cudaStream_t cudaStream2 = gpu::StreamAccessor::getStream(_gpuStream2);
+       
+    //find strips on stream2: upload data
+    //TODO: what if maximum thread < depthHeight? 
+    //the third params: shared memory size in BYTES
+    int* maxStripRowCountDevPtr;
+    cudaSafeCall(cudaGetSymbolAddress((void**)&maxStripRowCountDevPtr, maxStripRowCountDev));
+    cudaSafeCall(cudaMemsetAsync(maxStripRowCountDevPtr, 0, sizeof(int), cudaStream2));
 
+    //find strips on stream 2: kernel call
+    //turns out 1 block is the best even though profiler suggests more blocks
+    int nThread = _settings.depthHeight;    
+    int nBlock = 1; //divUp(_settings.depthHeight, nThread);
+    findStripsKernel<<<nBlock, nThread, nThread * sizeof(int), cudaStream2>>>(_debugFrameGpu, _stripsDev);
+    //cudaSafeCall(cudaGetLastError());
 
-    refineDebugImage();
-    findStrips();
+    //refine debug image on stream1: kernel call
+    dim3 threads(16, 32);
+    dim3 grid(divUp(_settings.depthWidth, threads.x), divUp(_settings.depthHeight, threads.y));
+    convertScaleAbsKernel<<<grid, threads, 0, cudaStream1>>>(_debugSobelEqFrameGpu);
+    //cudaSafeCall(cudaGetLastError());
+
+    gpu::equalizeHist(_debugSobelEqFrameGpu, _debugSobelEqFrameGpu, _debugSobelEqHistGpu, _debugSobelEqBufferGpu, _gpuStream1);
+    
+    //find strips on stream 2: download data
+    cudaSafeCall(cudaMemcpyFromSymbolAsync(&_maxStripRowCount, maxStripRowCountDev, sizeof(int), 0, cudaMemcpyDeviceToHost, cudaStream2));
+
+    //download strips
+    //download effective data, there are maxStripCount + 1 rows. The extra row stores count of strips for each column
+    cudaSafeCall(cudaMemcpyAsync(_stripsHost, _stripsDev, _maxStripRowCount * _settings.depthHeight * sizeof(_OmniTouchStripDev), 
+        cudaMemcpyDeviceToHost, cudaStream2));
+    //TODO: according to profiler, this trick seems not necessary. consider optimize for coelesence? 
+  
+    _gpuStream1.waitForCompletion();
+    _gpuStream2.waitForCompletion();
+    cudaSafeCall(cudaGetLastError());
+
+    //draw the debug image
+    refineDebugImageKernel<<<grid, threads>>>(_debugFrameGpu, _debugSobelEqFrameGpu);
+    cudaSafeCall(cudaGetLastError());
 
     //unbind textures
     cudaSafeCall(cudaUnbindTexture(texSobel));
