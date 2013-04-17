@@ -226,139 +226,143 @@ __device__ int maxStripRowCountDev;
 __global__ void findStripsKernel(gpu::PtrStepb debugPtr, _OmniTouchStripDev* resultPtr)
 {
     extern __shared__ int stripCount[];
-    int row = threadIdx.x;
+    int row = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    stripCount[threadIdx.x] = 1;
 
-    stripCount[row] = 1;
-	StripState state = StripSmooth;
-	int partialMin, partialMax;
-	int partialMinPos, partialMaxPos;
+    if (row < _settingsDev[0].depthHeight)
+    {
+	    StripState state = StripSmooth;
+	    int partialMin, partialMax;
+	    int partialMinPos, partialMaxPos;
 
-	for (int col = 0; col < _settingsDev[0].depthWidth; col++)
-	{
-		float currVal = tex2D(texSobel, col, row);
+	    for (int col = 0; col < _settingsDev[0].depthWidth; col++)
+	    {
+		    float currVal = tex2D(texSobel, col, row);
         
         
-		switch(state)
-		{
-		case StripSmooth:	//TODO: smooth
-			if (currVal > _dynamicParametersDev[0].omniTouchParam.fingerRisingThreshold)
-			{
-				partialMax = currVal;
-				partialMaxPos = col;
-				state = StripRising;
-			}
-			break;
+		    switch(state)
+		    {
+		    case StripSmooth:	//TODO: smooth
+			    if (currVal > _dynamicParametersDev[0].omniTouchParam.fingerRisingThreshold)
+			    {
+				    partialMax = currVal;
+				    partialMaxPos = col;
+				    state = StripRising;
+			    }
+			    break;
 
-		case StripRising:
-			if (currVal > _dynamicParametersDev[0].omniTouchParam.fingerRisingThreshold)
-			{
-				if (currVal > partialMax)
-				{
-					partialMax = currVal;
-					partialMaxPos = col;
-				}
-			}
-			else 
-			{
-				state = StripMidSmooth;
-			}
-			break;
+		    case StripRising:
+			    if (currVal > _dynamicParametersDev[0].omniTouchParam.fingerRisingThreshold)
+			    {
+				    if (currVal > partialMax)
+				    {
+					    partialMax = currVal;
+					    partialMaxPos = col;
+				    }
+			    }
+			    else 
+			    {
+				    state = StripMidSmooth;
+			    }
+			    break;
 
-		case StripMidSmooth:
-			if (currVal < -_dynamicParametersDev[0].omniTouchParam.fingerFallingThreshold)
-			{
-				partialMin = currVal;
-				partialMinPos = col;
-				state = StripFalling;
-			}
-			else if (currVal > _dynamicParametersDev[0].omniTouchParam.fingerRisingThreshold)
-			{
-				//previous trial faied, start over
-				partialMax = currVal;
-				partialMaxPos = col;
-				state = StripRising;
-			}
-			break;
+		    case StripMidSmooth:
+			    if (currVal < -_dynamicParametersDev[0].omniTouchParam.fingerFallingThreshold)
+			    {
+				    partialMin = currVal;
+				    partialMinPos = col;
+				    state = StripFalling;
+			    }
+			    else if (currVal > _dynamicParametersDev[0].omniTouchParam.fingerRisingThreshold)
+			    {
+				    //previous trial faied, start over
+				    partialMax = currVal;
+				    partialMaxPos = col;
+				    state = StripRising;
+			    }
+			    break;
 
-		case StripFalling:
-			if (currVal < -_dynamicParametersDev[0].omniTouchParam.fingerFallingThreshold)
-			{
-				if (currVal < partialMin)
-				{
-					partialMin = currVal;
-					partialMinPos = col;
-				}
-			}
-			else
-			{
-                ushort depth = tex2D(texDepth, (partialMaxPos + partialMinPos) / 2, row);
+		    case StripFalling:
+			    if (currVal < -_dynamicParametersDev[0].omniTouchParam.fingerFallingThreshold)
+			    {
+				    if (currVal < partialMin)
+				    {
+					    partialMin = currVal;
+					    partialMinPos = col;
+				    }
+			    }
+			    else
+			    {
+                    ushort depth = tex2D(texDepth, (partialMaxPos + partialMinPos) / 2, row);
 				
-                _IntPoint3D p1, p2;
-                p1.x = partialMaxPos;
-                p1.y = row;
-                p1.z = depth;
-                p2.x = partialMinPos;
-                p2.y = row;
-                p2.z = depth;
+                    _IntPoint3D p1, p2;
+                    p1.x = partialMaxPos;
+                    p1.y = row;
+                    p1.z = depth;
+                    p2.x = partialMinPos;
+                    p2.y = row;
+                    p2.z = depth;
 
-				float distSquared = getSquaredDistanceInRealWorld(p1, p2);
+				    float distSquared = getSquaredDistanceInRealWorld(p1, p2);
 
-				if (distSquared >= _dynamicParametersDev[0].omniTouchParam.fingerWidthMin * _dynamicParametersDev[0].omniTouchParam.fingerWidthMin 
-					&& distSquared <= _dynamicParametersDev[0].omniTouchParam.fingerWidthMax * _dynamicParametersDev[0].omniTouchParam.fingerWidthMax)
-				{
-					for (int tj = partialMaxPos; tj <= partialMinPos; tj++)
-					{
-                        //uchar* pixel = debugPtr.data + row * debugPtr.step + tj * 3;
-                        uchar* pixel = debugPtr.ptr(row) + tj * 3;
-						pixel[1] = 255;
-					}
+				    if (distSquared >= _dynamicParametersDev[0].omniTouchParam.fingerWidthMin * _dynamicParametersDev[0].omniTouchParam.fingerWidthMin 
+					    && distSquared <= _dynamicParametersDev[0].omniTouchParam.fingerWidthMax * _dynamicParametersDev[0].omniTouchParam.fingerWidthMax)
+				    {
+					    for (int tj = partialMaxPos; tj <= partialMinPos; tj++)
+					    {
+                            //uchar* pixel = debugPtr.data + row * debugPtr.step + tj * 3;
+                            uchar* pixel = debugPtr.ptr(row) + tj * 3;
+						    pixel[1] = 255;
+					    }
 
-                    int resultOffset = stripCount[row] * _settingsDev[0].depthHeight + row;
-                    resultPtr[resultOffset].start = partialMaxPos;
-                    resultPtr[resultOffset].end = partialMinPos;
-                    resultPtr[resultOffset].row = row;
-                    stripCount[row]++;
+                        int resultOffset = stripCount[threadIdx.x] * _settingsDev[0].depthHeight + row;
+                        resultPtr[resultOffset].start = partialMaxPos;
+                        resultPtr[resultOffset].end = partialMinPos;
+                        resultPtr[resultOffset].row = row;
+                        stripCount[threadIdx.x]++;
 
-					partialMax = currVal;
-					partialMaxPos = col;
-				}
+					    partialMax = currVal;
+					    partialMaxPos = col;
+				    }
 
-				state = StripSmooth;
-			}
-			break;
-		} //switch 
+				    state = StripSmooth;
+			    }
+			    break;
+		    } //switch 
 
-        if (stripCount[row] > Detector::MAX_STRIPS_PER_ROW)
-        {
-            break;
-        }
-	} //for 
+            if (stripCount[threadIdx.x] > Detector::MAX_STRIPS_PER_ROW)
+            {
+                break;
+            }
+	    } //for 
 
-    //the first row stores count for each column
-    //resultPtr[row].start = 1;   //this field unused
-    resultPtr[row].end = stripCount[row];
+        //the first row stores count for each column
+        //resultPtr[row].start = 1;   //this field unused
+        resultPtr[row].end = stripCount[threadIdx.x];
+    }   //if row < 0
 
     __syncthreads();
-    //map-recude to find the maximum strip count
+    //map-recude to find the local maximum strip count
     int total = blockDim.x;
     //int mid = (blockDim.x + 1) / 2;    //div up
     while (total > 1) 
     {
         int mid = (total + 1) / 2;
-        if (row < mid)
+        if (threadIdx.x < mid)
         {
-            if ( (row + mid < total) && stripCount[row + mid] > stripCount[row] ) 
+            if ( (threadIdx.x + mid < total) && stripCount[threadIdx.x + mid] > stripCount[threadIdx.x] ) 
             {
-                stripCount[row] = stripCount[row + mid];
+                stripCount[threadIdx.x] = stripCount[threadIdx.x + mid];
             }
         }
         __syncthreads();
         total = mid;
     } 
 
-    if (row == 0)
+    if (threadIdx.x == 0)
     {
-        maxStripRowCountDev = stripCount[0];
+        atomicMax(&maxStripRowCountDev, stripCount[0]);
     }
 }
 
@@ -366,7 +370,14 @@ void Detector::findStrips()
 {
     //TODO: what if maximum thread < depthHeight? 
     //the third params: shared memory size in BYTES
-    findStripsKernel<<<1, _settings.depthHeight, _settings.depthHeight * sizeof(int)>>>(_debugFrameGpu, _stripsDev);
+    int* maxStripRowCountDevPtr;
+    cudaSafeCall(cudaGetSymbolAddress((void**)&maxStripRowCountDevPtr, maxStripRowCountDev));
+    cudaSafeCall(cudaMemset(maxStripRowCountDevPtr, 0, sizeof(int)));
+
+    //turns out 1 block is the best even though profiler suggests more blocks
+    int nThread = _settings.depthHeight;    
+    int nBlock = 1; //divUp(_settings.depthHeight, nThread);
+    findStripsKernel<<<nBlock, nThread, nThread * sizeof(int)>>>(_debugFrameGpu, _stripsDev);
     cudaSafeCall(cudaGetLastError());
 
     cudaSafeCall(cudaMemcpyFromSymbol(&_maxStripRowCount, maxStripRowCountDev, sizeof(int)));
