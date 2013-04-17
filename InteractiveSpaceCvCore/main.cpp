@@ -48,7 +48,7 @@ void glutDisplay()
 	//compute fps
 	fpsCurrTime = glutGet(GLUT_ELAPSED_TIME);
 	fpsFrameCount++;
-	if (fpsCurrTime - fpsStartTime > 1000)
+	if (fpsCurrTime - fpsStartTime > 500)
 	{
 		double fps = fpsFrameCount * 1000.0 / (fpsCurrTime - fpsStartTime);
 		fpsStartTime = fpsCurrTime;

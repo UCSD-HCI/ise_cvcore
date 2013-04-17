@@ -36,35 +36,27 @@ Detector::Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, cons
     : _settings(settings), _rgbFrame(rgbFrame), _depthFrame(depthFrame), _debugFrame(debugFrame),
     _rgbFrameGpu(settings.rgbHeight, settings.rgbWidth, CV_8UC3),
     _depthFrameGpu(settings.depthHeight, settings.depthWidth, CV_16U),
-    _sobelFrame(settings.depthHeight, settings.depthWidth, CV_32F),
-    _sobelFrameGpu(settings.depthHeight, settings.depthWidth, CV_32F),
-    _debugSobelEqualizedFrame(settings.depthHeight, settings.depthWidth, CV_8U),
+     _sobelFrameGpu(settings.depthHeight, settings.depthWidth, CV_32F),
     _debugSobelEqFrameGpu(settings.depthHeight, settings.depthWidth, CV_8U),
     _debugFrameGpu(settings.depthHeight, settings.depthWidth, CV_8UC3)
 {
 	//on device: upload settings to device memory
     cudaSafeCall(cudaMemcpyToSymbol(_settingsDev, &settings, sizeof(CommonSettings)));
 
-	//init sobel
-    gpu::registerPageLocked(_sobelFrame);
-
     //init gpu memory for storing strips
     //trips for each row of the depth image are stored in each column of _stripsDev. 
     //The tranpose is to minimize the downloading. 
     //TODO: might destroy coalesced access. What's the tradeoff?
-    cudaSafeCall(cudaMallocHost(&_stripsHost, (MAX_STRIPS_PER_ROW + 1) * settings.depthHeight * sizeof(_OmniTouchStripDev)));
     cudaSafeCall(cudaMalloc(&_stripsDev, (MAX_STRIPS_PER_ROW + 1) * settings.depthHeight * sizeof(_OmniTouchStripDev)));
 
     //init gpu memory for storing fingers
     cudaSafeCall(cudaMallocHost(&_fingersHost, ISE_MAX_FINGER_NUM * sizeof(_OmniTouchFingerDev)));
     cudaSafeCall(cudaMalloc(&_fingersDev, ISE_MAX_FINGER_NUM * sizeof(_OmniTouchFingerDev)));
-    cudaSafeCall(cudaMalloc(&_fingerKeysDev, ISE_MAX_FINGER_NUM * sizeof(int)));
-
+ 
 	//init histogram for debug
 	_maxHistogramSize = _settings.maxDepthValue * 48 * 2;
     cudaSafeCall(cudaMemcpyToSymbol(_maxHistogramSizeDev, &_maxHistogramSize, sizeof(int)));
-	//_histogram = new int[_maxHistogramSize];
-
+	
     //init flood fill constant
     /*const int neighborOffset[3][2] =
 	{
@@ -85,13 +77,9 @@ Detector::Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, cons
 Detector::~Detector()
 {
     cudaSafeCall(cudaFree(_stripsDev));
-    cudaSafeCall(cudaFreeHost(_stripsHost));
-    cudaSafeCall(cudaFree(_fingerKeysDev));
     
     cudaSafeCall(cudaFree(_fingersDev));
     cudaSafeCall(cudaFreeHost(_fingersHost));
-
-    gpu::unregisterPageLocked(_sobelFrame);
 
     //delete [] _histogram;
     delete [] _floodHitTestVisitedFlag;
@@ -115,12 +103,9 @@ FingerDetectionResults Detector::detect()
     //_debugFrame.setTo(Scalar(0,0,0));	//set debug frame to black, can also done at GPU
     _debugFrameGpu.setTo(Scalar(0,0,0));
 
-    memset(_floodHitTestVisitedFlag, 0, _settings.depthWidth * _settings.depthHeight);
-
     _depthFrameGpu.upload(_depthFrame);
 	sobel();
-    _sobelFrameGpu.download(_sobelFrame);
-
+    
     //bind sobel for following usage
     cudaChannelFormatDesc desc = cudaCreateChannelDesc<float>();
     gpu::PtrStepSzb ptrStepSz(_sobelFrameGpu);
@@ -133,16 +118,14 @@ FingerDetectionResults Detector::detect()
 
     findStrips();
     findFingers();
-
-    _debugFrameGpu.download(_debugFrame);
     refineDebugImage();
-
-    floodHitTest();
     
     //unbind textures
     cudaSafeCall(cudaUnbindTexture(texSobel));
     cudaSafeCall(cudaUnbindTexture(texDepth));
-    //TODO: sort fingers by CPU
+    
+    _debugFrameGpu.download(_debugFrame);
+    floodHitTest();
 
 	FingerDetectionResults r;
 
@@ -213,30 +196,8 @@ double Detector::getSquaredDistanceInRealWorld(int x1, int y1, int depth1, int x
 	return ((rx1 - rx2) * (rx1 - rx2) + (ry1 - ry2) * (ry1 - ry2) + (rz1 - rz2) * (rz1 - rz2));
 }
 
-/*__global__ void adjustDepthKernel(gpu::PtrStepSzb ptr)
-{
-    int x = blockIdx.x * blockDim.x + threadIdx.x;
-    int y = blockIdx.y * blockDim.y + threadIdx.y;
-
-    if (x < ptr.cols && y < ptr.rows)
-    {
-        ushort v = tex2D(texDepth, x, y);
-        if (v == 0)
-        {
-            ushort* p = (ushort*)(ptr.data + y * ptr.step + x * sizeof(ushort));
-            *p = 65535; //TODO: avoid hard coding
-        }
-    }
-}*/
-
 void Detector::sobel()
 {
-    /*dim3 grid(1, 1);
-    dim3 threads(32, 16);
-
-    grid.x = divUp(_settings.depthWidth, threads.x);
-    grid.y = divUp(_settings.depthHeight, threads.y);
-    adjustDepthKernel<<<grid, threads>>>(_depthFrameGpu);*/
     cv::gpu::Sobel(_depthFrameGpu, _sobelFrameGpu, CV_32F, 1, 0, 5, -1);
 }
 
@@ -410,15 +371,11 @@ void Detector::findStrips()
 
     cudaSafeCall(cudaMemcpyFromSymbol(&_maxStripRowCount, maxStripRowCountDev, sizeof(int)));
 
-    //download effective data, there are maxStripCount + 1 rows. The extra row stores count of strips for each column
-    //cudaSafeCall(cudaMemcpy(_stripsHost, _stripsDev, _maxStripRowCount * _settings.depthHeight * sizeof(_OmniTouchStripDev), cudaMemcpyDeviceToHost));
-
-    //TODO: according to profiler, this trick seems not necessary. consider optimize for coelesence? 
 }
 
 __device__ int fingerCountDev;
 
-__global__ void findFingersKernel(gpu::PtrStepb debugPtr, _OmniTouchStripDev* strips, _OmniTouchFingerDev* fingers, int* fingerKeys)
+__global__ void findFingersKernel(gpu::PtrStepb debugPtr, _OmniTouchStripDev* strips, _OmniTouchFingerDev* fingers)
 {
     extern __shared__ uchar sharedBuffer[];
 
@@ -557,7 +514,6 @@ __global__ void findFingersKernel(gpu::PtrStepb debugPtr, _OmniTouchStripDev* st
 
                 int currentFingerCount = atomicAdd(&fingerCountDev, 1);
                 fingers[currentFingerCount] = finger;
-                fingerKeys[currentFingerCount] = finger.end.y - finger.tip.y;
 			} // check length
 		
         }   // if threadIdx.x < strip count
@@ -574,15 +530,10 @@ void Detector::findFingers()
 
     assert(sharedMemSize < 49152);  //TODO: read shared memory size from device query; if not large enough, use global memory instead
 
-    findFingersKernel<<<1, maxStripCount, sharedMemSize>>>(_debugFrameGpu, _stripsDev, _fingersDev, _fingerKeysDev);
+    findFingersKernel<<<1, maxStripCount, sharedMemSize>>>(_debugFrameGpu, _stripsDev, _fingersDev);
     cudaSafeCall(cudaGetLastError());
 
     cudaSafeCall(cudaMemcpyFromSymbol(&_fingerCount, fingerCountDev, sizeof(int)));
-
-    /*thrust::device_ptr<int> devKeyPtr = thrust::device_pointer_cast(_fingerKeysDev);
-    thrust::device_ptr<_OmniTouchFingerDev> devFingersPtr = thrust::device_pointer_cast(_fingersDev);
-
-    thrust::sort_by_key(devKeyPtr, devKeyPtr + _fingerCount, devFingersPtr, thrust::greater<int>());*/
 
     //convert data
     cudaSafeCall(cudaMemcpy(_fingersHost, _fingersDev, _fingerCount * sizeof(_OmniTouchFingerDev), cudaMemcpyDeviceToHost));
@@ -595,6 +546,8 @@ void Detector::findFingers()
         OmniTouchFinger finger(f->tip.x, f->tip.y, f->tip.z, f->end.x, f->end.y, f->end.z);
         _fingers.push_back(finger);
     }
+
+    sort(_fingers.begin(), _fingers.end());
 
 }
 
@@ -982,7 +935,5 @@ void Detector::refineDebugImage()
     refineDebugImageKernel<<<grid, threads>>>(_debugFrameGpu, _debugSobelEqFrameGpu);
     cudaSafeCall(cudaGetLastError());
     
-    _debugFrameGpu.download(_debugFrame);
-
 }
 

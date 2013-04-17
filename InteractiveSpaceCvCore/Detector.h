@@ -18,14 +18,6 @@ namespace ise
 	    StripFalling
     } StripState;
 
-    typedef struct _OmniTouchStrip
-    {
-	    int row;
-	    int leftCol, rightCol;
-	    bool visited;
-	    struct _OmniTouchStrip(int row, int leftCol, int rightCol) : row(row), leftCol(leftCol), rightCol(rightCol), visited(false) { }
-    } OmniTouchStrip;
-
     typedef struct _OmniTouchFinger
     {
 	    int tipX, tipY, tipZ;
@@ -77,19 +69,14 @@ namespace ise
         int _maxHistogramSize;
         //int* _histogram;
         uchar* _floodHitTestVisitedFlag;
-        std::vector<std::vector<OmniTouchStrip> > _strips;
         std::vector<OmniTouchFinger> _fingers;
 
         const cv::Mat& _rgbFrame;
         const cv::Mat& _depthFrame;
         cv::Mat& _debugFrame;
 
-        cv::Mat _sobelFrame;
-        cv::Mat _debugSobelEqualizedFrame;
-
         int _maxStripRowCount; //maximum strip count (+1 for count of each column) of a row in the current frame
-        _OmniTouchStripDev* _stripsHost;
-
+ 
         int _fingerCount;
         _OmniTouchFingerDev* _fingersHost;
 
@@ -101,7 +88,6 @@ namespace ise
         cv::gpu::GpuMat _debugSobelEqFrameGpu;
         _OmniTouchStripDev* _stripsDev;
         _OmniTouchFingerDev* _fingersDev;
-        int* _fingerKeysDev;
 
         inline ushort* ushortValAt(cv::Mat& mat, int row, int col);
         inline const ushort* ushortValAt(const cv::Mat& mat, int row, int col);
