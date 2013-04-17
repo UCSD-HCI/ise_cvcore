@@ -82,6 +82,8 @@ namespace ise
         cv::gpu::GpuMat _debugFrameGpu;   
         cv::gpu::GpuMat _sobelFrameGpu;
         cv::gpu::GpuMat _debugSobelEqFrameGpu;
+        cv::gpu::GpuMat _debugSobelEqHistGpu;
+        cv::gpu::GpuMat _debugSobelEqBufferGpu;
         _OmniTouchStripDev* _stripsDev;
 
         inline ushort* ushortValAt(cv::Mat& mat, int row, int col);
@@ -93,6 +95,7 @@ namespace ise
         inline static int divUp(int total, int grain);
         inline static void cudaSafeCall(cudaError_t err);
         
+        void gpuProcess();
         inline void sobel();
         void findStrips();
         void findFingers();

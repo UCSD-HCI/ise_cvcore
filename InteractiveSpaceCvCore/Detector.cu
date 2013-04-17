@@ -37,8 +37,10 @@ Detector::Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, cons
     _rgbFrameGpu(settings.rgbHeight, settings.rgbWidth, CV_8UC3),
     _depthFrameGpu(settings.depthHeight, settings.depthWidth, CV_16U),
      _sobelFrameGpu(settings.depthHeight, settings.depthWidth, CV_32F),
+    _debugFrameGpu(settings.depthHeight, settings.depthWidth, CV_8UC3),
     _debugSobelEqFrameGpu(settings.depthHeight, settings.depthWidth, CV_8U),
-    _debugFrameGpu(settings.depthHeight, settings.depthWidth, CV_8UC3)
+    _debugSobelEqHistGpu(1, 256, CV_32SC1),
+    _debugSobelEqBufferGpu(settings.depthHeight, settings.depthWidth, CV_8U)
 {
 	//on device: upload settings to device memory
     cudaSafeCall(cudaMemcpyToSymbol(_settingsDev, &settings, sizeof(CommonSettings)));
@@ -88,7 +90,10 @@ FingerDetectionResults Detector::detect()
 {
 	//_iseHistEqualize(depthFrame, debugFrame);
 
-    //_debugFrame.setTo(Scalar(0,0,0));	//set debug frame to black, can also done at GPU
+
+    gpuProcess();
+    
+    /*
     _debugFrameGpu.setTo(Scalar(0,0,0));
 
     _depthFrameGpu.upload(_depthFrame);
@@ -112,9 +117,11 @@ FingerDetectionResults Detector::detect()
     cudaSafeCall(cudaUnbindTexture(texDepth));
     
     _debugFrameGpu.download(_debugFrame);
+    */
 
     findFingers();
     floodHitTest();
+
 
 	FingerDetectionResults r;
 
@@ -639,7 +646,8 @@ void Detector::refineDebugImage()
     convertScaleAbsKernel<<<grid, threads>>>(_debugSobelEqFrameGpu);
     cudaSafeCall(cudaGetLastError());
 
-    gpu::equalizeHist(_debugSobelEqFrameGpu, _debugSobelEqFrameGpu);
+    gpu::equalizeHist(_debugSobelEqFrameGpu, _debugSobelEqFrameGpu, _debugSobelEqHistGpu, _debugSobelEqBufferGpu);
+    
     
 	//draw the image
     refineDebugImageKernel<<<grid, threads>>>(_debugFrameGpu, _debugSobelEqFrameGpu);
@@ -647,3 +655,31 @@ void Detector::refineDebugImage()
     
 }
 
+void Detector::gpuProcess()
+{
+    _debugFrameGpu.setTo(Scalar(0,0,0));
+
+    _depthFrameGpu.upload(_depthFrame);
+	sobel();
+    
+    //bind sobel for following usage
+    cudaChannelFormatDesc desc = cudaCreateChannelDesc<float>();
+    gpu::PtrStepSzb ptrStepSz(_sobelFrameGpu);
+    cudaSafeCall(cudaBindTexture2D(NULL, texSobel, ptrStepSz.data, desc, ptrStepSz.cols, ptrStepSz.rows, ptrStepSz.step));
+
+    //bind depth
+    cudaChannelFormatDesc descDepth = cudaCreateChannelDesc<ushort>();
+    gpu::PtrStepSzb ptrStepSzDepth(_depthFrameGpu);
+    cudaSafeCall(cudaBindTexture2D(NULL, texDepth, ptrStepSzDepth.data, descDepth, ptrStepSzDepth.cols, ptrStepSzDepth.rows, ptrStepSzDepth.step));
+
+
+
+    refineDebugImage();
+    findStrips();
+
+    //unbind textures
+    cudaSafeCall(cudaUnbindTexture(texSobel));
+    cudaSafeCall(cudaUnbindTexture(texDepth));
+    
+    _debugFrameGpu.download(_debugFrame);
+}
