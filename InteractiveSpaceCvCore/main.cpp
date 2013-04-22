@@ -19,7 +19,7 @@ using namespace cv;
 using namespace ise;
 
 static CommonSettings _settings;
-static cv::Mat _rgbFrame, _depthFrame, _debugFrame;
+static cv::Mat _rgbFrame, _depthFrame, _debugFrame, _depthToRgbCoordFrame;
 static KinectSimulator* _kinectSimulator;
 static Detector* _detector;
 
@@ -56,11 +56,14 @@ void glutDisplay()
 
 		printf("FPS = %6.2f\r", fps);
 	}
+
+    Sleep(100);
 }
 
 int main(int argc, char** argv)
 {
-	const char pathPrefix[] = "C:\\Users\\cuda\\kinect\\record\\rec130412-2036";
+    const char pathPrefix[] = "C:\\Users\\cuda\\kinect\\record\\rec130421-2139";
+	//const char pathPrefix[] = "C:\\Users\\cuda\\kinect\\record\\rec130412-2036";
 
 	//load settings
 	loadCommonSettings(pathPrefix, &_settings);
@@ -71,6 +74,9 @@ int main(int argc, char** argv)
 	_rgbFrame.create(_settings.rgbHeight, _settings.rgbWidth, CV_8UC3);
 	_depthFrame.create(_settings.depthHeight, _settings.depthWidth, CV_16U);
 	_debugFrame.create(_settings.depthHeight, _settings.depthWidth, CV_8UC3);
+
+    //init coord frame
+    _depthToRgbCoordFrame.create(_settings.depthHeight, _settings.depthWidth, CV_32SC2);
 
     try
     {
@@ -84,8 +90,8 @@ int main(int argc, char** argv)
     }
 
 	//init simulator and detector
-    _kinectSimulator = new KinectSimulator(_settings, pathPrefix, _rgbFrame, _depthFrame);
-	_detector = new Detector(_settings, _rgbFrame, _depthFrame, _debugFrame);
+    _kinectSimulator = new KinectSimulator(_settings, pathPrefix, _rgbFrame, _depthFrame, _depthToRgbCoordFrame);
+    _detector = new Detector(_settings, _rgbFrame, _depthFrame, _depthToRgbCoordFrame, _debugFrame);
     _detector->updateDynamicParameters(dynamicParams);
 
 	//init glut
@@ -119,6 +125,7 @@ int main(int argc, char** argv)
 	_rgbFrame.release();
 	_depthFrame.release();
 	_debugFrame.release();
+    _depthToRgbCoordFrame.release();
     
     //system("PAUSE");
 

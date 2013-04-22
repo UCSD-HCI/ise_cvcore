@@ -5,16 +5,19 @@
 #include "DataTypes.h"
 #include <opencv2\opencv.hpp>
 
+class INuiSensor;
+
 namespace ise
 {
 
-    class KinectSimulator
+    class KinectSimulator 
     {
     private:
         
         //passed by from the caller. KinectSimulator won't release them. 
         cv::Mat& _rgbFrame;
         cv::Mat& _depthFrame;
+        cv::Mat& _depthToRgbCoordFrame;
         
         cv::Mat _rgbFrameBuffer;
 
@@ -26,10 +29,12 @@ namespace ise
         int _currentFrame;
         int _frameCount;
 
+        INuiSensor* _sensor; //temporary for mapping coordinates
+
     public:
         static const int ERROR_KINECT_EOF = -10;
 
-        KinectSimulator(const CommonSettings& settings, const char* recFilePrefix, cv::Mat& rgbFrame, cv::Mat& depthFrame);
+        KinectSimulator(const CommonSettings& settings, const char* recFilePrefix, cv::Mat& rgbFrame, cv::Mat& depthFrame, cv::Mat& depthToRgbCoordFrame);
 
         //read the next rgb/depth frames and store them in the buffers specified in initWithSettings
         int capture();

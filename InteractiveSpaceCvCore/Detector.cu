@@ -33,8 +33,8 @@ __constant__ DynamicParameters _dynamicParametersDev[1];
 //__constant__ int _floodFillNeighborOffset[6];
 __constant__ int _maxHistogramSizeDev[1];
 
-Detector::Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, const cv::Mat& depthFrame, cv::Mat& debugFrame)
-    : _settings(settings), _rgbFrame(rgbFrame), _depthFrame(depthFrame), _debugFrame(debugFrame),
+Detector::Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, const cv::Mat& depthFrame, const cv::Mat& depthToColorCoordFrame, cv::Mat& debugFrame)
+    : _settings(settings), _rgbFrame(rgbFrame), _depthFrame(depthFrame), _depthToColorCoordFrame(depthToColorCoordFrame), _debugFrame(debugFrame),
     _rgbFrameGpu(settings.rgbHeight, settings.rgbWidth, CV_8UC3),
     _depthFrameGpu(settings.depthHeight, settings.depthWidth, CV_16U),
      _sobelFrameGpu(settings.depthHeight, settings.depthWidth, CV_32F),
@@ -121,7 +121,7 @@ FingerDetectionResults Detector::detect()
     */
 
     findFingers();
-    floodHitTest();
+   //floodHitTest();
 
 
 	FingerDetectionResults r;
@@ -495,9 +495,18 @@ void Detector::findFingers()
 					for (int colFill = leftCol; colFill <= rightCol; colFill++)
 					{
                         uchar* dstPixel = _debugFrame.ptr(rowFill) + colFill * 3;
-                        //uchar* dstPixel = debugPtr.data + rowFill * debugPtr.step + colFill * 3;
-						dstPixel[0] = 255;
-						dstPixel[2] = 255;
+                        
+						//dstPixel[0] = 255;
+						//dstPixel[2] = 255;
+
+                        //read color
+                        const int* mapCoord = (int*)_depthToColorCoordFrame.ptr(rowFill) + colFill * 2;
+                        int cx = mapCoord[0];
+                        int cy = mapCoord[1];
+                        const uchar* rgbPixel = _rgbFrame.ptr(cy) + cx * 3;
+                        //const uchar* rgbPixel = _rgbFrame.ptr(rowFill) + colFill * 3;
+
+                        memcpy(dstPixel, rgbPixel, 3);
 					}
 				}
 

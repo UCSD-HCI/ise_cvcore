@@ -67,6 +67,7 @@ namespace ise
 
         const cv::Mat& _rgbFrame;
         const cv::Mat& _depthFrame;
+        const cv::Mat& _depthToColorCoordFrame;
         cv::Mat& _debugFrame;
 
         int _maxStripRowCount; //maximum strip count (+1 for count of each column) of a row in the current frame
@@ -108,7 +109,7 @@ namespace ise
         inline double getSquaredDistanceInRealWorld(int x1, int y1, int depth1, int x2, int y2, int depth2);
 
     public:
-        Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, const cv::Mat& depthFrame, cv::Mat& debugFrame);
+        Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, const cv::Mat& depthFrame, const cv::Mat& depthToColorCoordFrame, cv::Mat& debugFrame);
 
         void updateDynamicParameters(const DynamicParameters& parameters);
 
