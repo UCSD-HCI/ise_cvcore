@@ -663,15 +663,19 @@ void Detector::refineDebugImage()
 
 void Detector::gpuProcess()
 {
-    _debugFrameGpu.setTo(Scalar(0,0,0));
+    cudaStream_t cudaStreamDepthDebug = gpu::StreamAccessor::getStream(_gpuStreamDepthDebug);
+    cudaStream_t cudaStreamDepthWorking = gpu::StreamAccessor::getStream(_gpuStreamDepthWorking);
+    
+    _depthFrameGpu.upload(_depthFrame);
+    //_gpuStreamDepthWorking.enqueueUpload(_depthFrame, _depthFrameGpu);
+    
+    //Looks like when running Sobel async, visual profiler won't generate any timeline.
+    cv::gpu::Sobel(_depthFrameGpu, _sobelFrameGpu, CV_32F, 1, 0, _sobelFrameBufferGpu, 5, -1);
+    //cv::gpu::Sobel(_depthFrameGpu, _sobelFrameGpu, CV_32F, 1, 0, _sobelFrameBufferGpu, 5, -1.0f, BORDER_DEFAULT, -1, _gpuStreamDepthWorking);
+    //_gpuStreamDepthWorking.waitForCompletion();
 
-    _gpuStreamDepthWorking.enqueueUpload(_depthFrame, _depthFrameGpu);
-    _gpuStreamRgbWorking.enqueueUpload(_rgbFrame, _rgbFrameGpu);
-	
-    //cv::gpu::Sobel(_depthFrameGpu, _sobelFrameGpu, CV_32F, 1, 0);
-    cv::gpu::Sobel(_depthFrameGpu, _sobelFrameGpu, CV_32F, 1, 0, _sobelFrameBufferGpu, 5, -1.0f, BORDER_DEFAULT, -1, _gpuStreamDepthWorking);
-    _gpuStreamDepthWorking.waitForCompletion();
-
+    _gpuStreamDepthWorking.enqueueMemSet(_debugFrameGpu, Scalar(0,0,0));
+    
     //bind sobel for following usage
     cudaChannelFormatDesc desc = cudaCreateChannelDesc<float>();
     gpu::PtrStepSzb ptrStepSz(_sobelFrameGpu);
@@ -681,10 +685,7 @@ void Detector::gpuProcess()
     cudaChannelFormatDesc descDepth = cudaCreateChannelDesc<ushort>();
     gpu::PtrStepSzb ptrStepSzDepth(_depthFrameGpu);
     cudaSafeCall(cudaBindTexture2D(NULL, texDepth, ptrStepSzDepth.data, descDepth, ptrStepSzDepth.cols, ptrStepSzDepth.rows, ptrStepSzDepth.step));
-
-    cudaStream_t cudaStreamDepthDebug = gpu::StreamAccessor::getStream(_gpuStreamDepthDebug);
-    cudaStream_t cudaStreamDepthWorking = gpu::StreamAccessor::getStream(_gpuStreamDepthWorking);
-       
+    
     //find strips on stream2: upload data
     //TODO: what if maximum thread < depthHeight? 
     //the third params: shared memory size in BYTES
@@ -692,6 +693,8 @@ void Detector::gpuProcess()
     cudaSafeCall(cudaGetSymbolAddress((void**)&maxStripRowCountDevPtr, maxStripRowCountDev));
     cudaSafeCall(cudaMemsetAsync(maxStripRowCountDevPtr, 0, sizeof(int), cudaStreamDepthWorking));
 
+    _gpuStreamRgbWorking.enqueueUpload(_rgbFrame, _rgbFrameGpu);
+	
     //find strips on stream 2: kernel call
     //turns out 1 block is the best even though profiler suggests more blocks
     int nThread = _settings.depthHeight;    
@@ -721,15 +724,19 @@ void Detector::gpuProcess()
     cudaSafeCall(cudaGetLastError());
 
     //draw the debug image
-    refineDebugImageKernel<<<grid, threads>>>(_debugFrameGpu, _debugSobelEqFrameGpu);
+    refineDebugImageKernel<<<grid, threads, 0, cudaStreamDepthDebug>>>(_debugFrameGpu, _debugSobelEqFrameGpu);
     cudaSafeCall(cudaGetLastError());
+    
+    //_debugFrameGpu.download(_debugFrame);
+    _gpuStreamDepthDebug.enqueueDownload(_debugFrameGpu, _debugFrame);
+    _gpuStreamDepthDebug.waitForCompletion();
+
 
     //unbind textures
     cudaSafeCall(cudaUnbindTexture(texSobel));
     cudaSafeCall(cudaUnbindTexture(texDepth));
     
-    _gpuStreamDepthDebug.enqueueDownload(_debugFrameGpu, _debugFrame);
-    //_debugFrameGpu.download(_debugFrame);
-    _gpuStreamDepthDebug.waitForCompletion();
-    _gpuStreamRgbWorking.waitForCompletion();
+
+    //_gpuStreamRgbWorking.waitForCompletion();
+    
 }
