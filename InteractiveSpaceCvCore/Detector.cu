@@ -13,6 +13,7 @@
 #include <opencv2\gpu\stream_accessor.hpp>
 #include <cuda.h>
 #include <cuda_runtime.h>
+#include <math_constants.h>
 //#include <thrust/sort.h>
 
 
@@ -36,6 +37,10 @@ __constant__ int _maxHistogramSizeDev[1];
 Detector::Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, const cv::Mat& depthFrame, const cv::Mat& depthToColorCoordFrame, cv::Mat& debugFrame)
     : _settings(settings), _rgbFrame(rgbFrame), _depthFrame(depthFrame), _depthToColorCoordFrame(depthToColorCoordFrame), _debugFrame(debugFrame),
     _rgbFrameGpu(settings.rgbHeight, settings.rgbWidth, CV_8UC3),
+    _rgbFloatFrameGpu(settings.rgbHeight, settings.rgbWidth, CV_32FC3),
+    _rgbLuvFrameGpu(settings.rgbHeight, settings.rgbWidth, CV_32FC3),
+    _rgbPdfFrame(settings.rgbHeight, settings.rgbWidth, CV_32F),
+    _rgbPdfFrameGpu(settings.rgbHeight, settings.rgbWidth, CV_32F),
     _depthFrameGpu(settings.depthHeight, settings.depthWidth, CV_16U),
     _sobelFrameGpu(settings.depthHeight, settings.depthWidth, CV_32F),
     _sobelFrameBufferGpu(settings.depthHeight, settings.depthWidth, CV_32F),
@@ -46,6 +51,9 @@ Detector::Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, cons
 {
 	//on device: upload settings to device memory
     cudaSafeCall(cudaMemcpyToSymbol(_settingsDev, &settings, sizeof(CommonSettings)));
+
+    //page lock
+    gpu::registerPageLocked(_rgbPdfFrame);
 
     //init gpu memory for storing strips
     //trips for each row of the depth image are stored in each column of _stripsDev. 
@@ -70,6 +78,8 @@ Detector::Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, cons
 
 Detector::~Detector()
 {
+    gpu::unregisterPageLocked(_rgbPdfFrame);
+
     cudaSafeCall(cudaFree(_stripsDev));
     cudaSafeCall(cudaFreeHost(_stripsHost));
     
@@ -192,11 +202,6 @@ double Detector::getSquaredDistanceInRealWorld(int x1, int y1, int depth1, int x
 	convertProjectiveToRealWorld(x2, y2, depth2, rx2, ry2, rz2);
 
 	return ((rx1 - rx2) * (rx1 - rx2) + (ry1 - ry2) * (ry1 - ry2) + (rz1 - rz2) * (rz1 - rz2));
-}
-
-void Detector::sobel()
-{
-    cv::gpu::Sobel(_depthFrameGpu, _sobelFrameGpu, CV_32F, 1, 0, 5, -1);
 }
 
 __device__ _FloatPoint3D convertProjectiveToRealWorld(_IntPoint3D p)
@@ -362,24 +367,6 @@ __global__ void findStripsKernel(gpu::PtrStepb debugPtr, _OmniTouchStripDev* res
     {
         atomicMax(&maxStripRowCountDev, stripCount[0]);
     }
-}
-
-void Detector::findStrips()
-{
-    //TODO: what if maximum thread < depthHeight? 
-    //the third params: shared memory size in BYTES
-    int* maxStripRowCountDevPtr;
-    cudaSafeCall(cudaGetSymbolAddress((void**)&maxStripRowCountDevPtr, maxStripRowCountDev));
-    cudaSafeCall(cudaMemset(maxStripRowCountDevPtr, 0, sizeof(int)));
-
-    //turns out 1 block is the best even though profiler suggests more blocks
-    int nThread = _settings.depthHeight;    
-    int nBlock = 1; //divUp(_settings.depthHeight, nThread);
-    findStripsKernel<<<nBlock, nThread, nThread * sizeof(int)>>>(_debugFrameGpu, _stripsDev);
-    cudaSafeCall(cudaGetLastError());
-
-    cudaSafeCall(cudaMemcpyFromSymbol(&_maxStripRowCount, maxStripRowCountDev, sizeof(int)));
-
 }
 
 void Detector::findFingers()
@@ -644,27 +631,87 @@ __global__ void refineDebugImageKernel(gpu::PtrStepb debugPtr, gpu::PtrStepb sob
     }
 }
 
-void Detector::refineDebugImage()
-{
-    //truncate and eq histogram on sobel
-    dim3 threads(16, 32);
-    dim3 grid(divUp(_settings.depthWidth, threads.x), divUp(_settings.depthHeight, threads.y));
-    convertScaleAbsKernel<<<grid, threads>>>(_debugSobelEqFrameGpu);
-    cudaSafeCall(cudaGetLastError());
 
-    gpu::equalizeHist(_debugSobelEqFrameGpu, _debugSobelEqFrameGpu, _debugSobelEqHistGpu, _debugSobelEqBufferGpu);
-    
-    
-	//draw the image
-    refineDebugImageKernel<<<grid, threads>>>(_debugFrameGpu, _debugSobelEqFrameGpu);
-    cudaSafeCall(cudaGetLastError());
-    
+__global__ void applySkinColorModel(gpu::PtrStepf luvPtr, gpu::PtrStepf pdfPtr)
+{
+    const int nComp = 3;
+    const float mu[nComp][2] = { {11.2025f, 8.2296f},
+                         {35.5613f, 30.1054f},
+                         {22.7229f, 19.4680f} };
+    const float conv[nComp][2] = { {37.691f, 43.929f},
+                            {225.23f, 242.08f},
+                            {54.738f, 61.146f} };
+    const float prop[nComp] = {0.28847f, 0.24641f, 0.46512f};
+
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (x < _settingsDev[0].rgbWidth && y < _settingsDev[0].rgbHeight)
+    {
+        float* luv = luvPtr.ptr(y) + x * 3;
+        float u = luv[1];
+        float v = luv[2];
+
+        float p = 0;
+        
+        #pragma unroll
+        for (int i = 0; i < nComp; i++)
+        {
+            float d = 1.f / (2 * CUDART_PI_F * sqrt(conv[i][0] * conv[i][1]));
+            float e = expf(-0.5f * (powf(u - mu[i][0], 2) / conv[i][0] + powf(v - mu[i][1], 2) / conv[i][1]));
+            p += prop[i] * d * e;
+        }
+
+        float* dst = pdfPtr.ptr(y) + x;
+        //*dst = p * 500.f;
+        //*dst = luv[0] / 100.0f;
+        *dst = p * 1000.f;
+    }
 }
+
+
+/*__global__ void applySkinColorModel(gpu::PtrStepf luvPtr, gpu::PtrStepf pdfPtr)
+{
+    const int nComp = 3;
+    const double mu[nComp][2] = {{11.2024686283253,          8.22956679034156},
+                                {35.5612918973632,          30.1054062096261},
+                                {22.7229203550896,          19.4680134168419}};
+    const double conv[nComp][2] = { { 37.6914561020612,          43.9294235115161},
+                                    { 225.22898713039,          242.081315811438},
+                                    { 54.7381847499349,          61.1464611751676} };
+    const double prop[nComp] = {0.28846824006064,         0.246407551490279,          0.46512420844908};
+
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (x < _settingsDev[0].rgbWidth && y < _settingsDev[0].rgbHeight)
+    {
+        float* luv = luvPtr.ptr(y) + x * 3;
+        double u = luv[1];
+        double v = luv[2];
+
+        double p = 0;
+        
+        #pragma unroll
+        for (int i = 0; i < nComp; i++)
+        {
+            double d = 1.0 / (2.0 * CUDART_PI_F * sqrt(conv[i][0] * conv[i][1]));
+            double e = exp(-0.5 * (pow(u - mu[i][0], 2) / conv[i][0] + pow(v - mu[i][1], 2) / conv[i][1]));
+            p += prop[i] * d * e;
+        }
+
+        float* dst = pdfPtr.ptr(y) + x;
+        //*dst = p * 500.f;
+        //*dst = luv[0] / 100.0f;
+        *dst = (float)(p * 1000.0);
+    }
+}*/
 
 void Detector::gpuProcess()
 {
     cudaStream_t cudaStreamDepthDebug = gpu::StreamAccessor::getStream(_gpuStreamDepthDebug);
     cudaStream_t cudaStreamDepthWorking = gpu::StreamAccessor::getStream(_gpuStreamDepthWorking);
+    cudaStream_t cudaStreamRgbWorking = gpu::StreamAccessor::getStream(_gpuStreamRgbWorking);
     
     _depthFrameGpu.upload(_depthFrame);
     //_gpuStreamDepthWorking.enqueueUpload(_depthFrame, _depthFrameGpu);
@@ -693,14 +740,23 @@ void Detector::gpuProcess()
     cudaSafeCall(cudaGetSymbolAddress((void**)&maxStripRowCountDevPtr, maxStripRowCountDev));
     cudaSafeCall(cudaMemsetAsync(maxStripRowCountDevPtr, 0, sizeof(int), cudaStreamDepthWorking));
 
-    _gpuStreamRgbWorking.enqueueUpload(_rgbFrame, _rgbFrameGpu);
-	
     //find strips on stream 2: kernel call
     //turns out 1 block is the best even though profiler suggests more blocks
     int nThread = _settings.depthHeight;    
     int nBlock = 1; //divUp(_settings.depthHeight, nThread);
     findStripsKernel<<<nBlock, nThread, nThread * sizeof(int), cudaStreamDepthWorking>>>(_debugFrameGpu, _stripsDev);
     //cudaSafeCall(cudaGetLastError());
+
+    //rgb manipulation
+    _gpuStreamRgbWorking.enqueueUpload(_rgbFrame, _rgbFrameGpu);
+    _gpuStreamRgbWorking.enqueueConvert(_rgbFrameGpu, _rgbFloatFrameGpu, CV_32FC3, 1.f / 255.f);
+    gpu::cvtColor(_rgbFloatFrameGpu, _rgbLuvFrameGpu, CV_RGB2Luv, 0, _gpuStreamRgbWorking);
+
+    //rgb skin color model
+    dim3 rgbThreads(16, 32);
+    dim3 rgbGrid(divUp(_settings.rgbWidth, rgbThreads.x), divUp(_settings.rgbHeight, rgbThreads.y));
+    applySkinColorModel<<<rgbGrid, rgbThreads, 0, cudaStreamRgbWorking>>>(_rgbLuvFrameGpu, _rgbPdfFrameGpu);
+    cudaSafeCall(cudaGetLastError());
 
     //refine debug image on stream1: kernel call
     dim3 threads(16, 32);
@@ -710,6 +766,9 @@ void Detector::gpuProcess()
 
     gpu::equalizeHist(_debugSobelEqFrameGpu, _debugSobelEqFrameGpu, _debugSobelEqHistGpu, _debugSobelEqBufferGpu, _gpuStreamDepthDebug);
     
+    //rgb download
+    _gpuStreamRgbWorking.enqueueDownload(_rgbPdfFrameGpu, _rgbPdfFrame);
+
     //find strips on stream 2: download data
     cudaSafeCall(cudaMemcpyFromSymbolAsync(&_maxStripRowCount, maxStripRowCountDev, sizeof(int), 0, cudaMemcpyDeviceToHost, cudaStreamDepthWorking));
 
@@ -737,6 +796,6 @@ void Detector::gpuProcess()
     cudaSafeCall(cudaUnbindTexture(texDepth));
     
 
-    //_gpuStreamRgbWorking.waitForCompletion();
+    _gpuStreamRgbWorking.waitForCompletion();
     
 }

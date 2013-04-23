@@ -82,7 +82,6 @@ int KinectSimulator::capture()
     );
     assert(SUCCEEDED(hr));*/
     
-
 	_currentFrame++;
 
 	return 0;

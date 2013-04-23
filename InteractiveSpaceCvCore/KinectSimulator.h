@@ -38,6 +38,7 @@ namespace ise
 
         //read the next rgb/depth frames and store them in the buffers specified in initWithSettings
         int capture();
+        inline int getCurrentFrame() const { return _currentFrame; }
 
         ~KinectSimulator();
     };

@@ -13,6 +13,7 @@
 #include <opencv2\opencv.hpp>
 #include <opencv2\gpu\gpu.hpp>
 #include <cuda_runtime.h>
+#include <fstream>
 
 
 using namespace cv;
@@ -42,8 +43,17 @@ void glutDisplay()
 
 	//opengl draw
 	glClear(GL_COLOR_BUFFER_BIT);
-	glDrawPixels(_settings.depthWidth, _settings.depthHeight, GL_RGB, GL_UNSIGNED_BYTE, _debugFrame.data);
+	//glDrawPixels(_settings.depthWidth, _settings.depthHeight, GL_RGB, GL_UNSIGNED_BYTE, _debugFrame.data);
+    glDrawPixels(_settings.depthWidth, _settings.depthHeight, GL_LUMINANCE, GL_FLOAT, _detector->getPdfFrame().data);
 	glutSwapBuffers();
+
+    /*
+    if (_kinectSimulator->getCurrentFrame() == 30)
+    {
+        std::ofstream of("test.csv");
+        of << format(_detector->getPdfFrame(), "csv") << std::endl;
+        of.close();
+    }*/
 
 	//compute fps
 	fpsCurrTime = glutGet(GLUT_ELAPSED_TIME);
@@ -98,7 +108,7 @@ int main(int argc, char** argv)
 	glutInit(&argc, argv);
 	glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB);
 	glutInitWindowSize(_settings.depthWidth, _settings.depthHeight);
-	glutInitWindowPosition(500, 500);
+	glutInitWindowPosition(1920, 500);
 	glutCreateWindow("Window");
 	glutSetOption(GLUT_ACTION_ON_WINDOW_CLOSE, GLUT_ACTION_CONTINUE_EXECUTION);
 

@@ -69,6 +69,7 @@ namespace ise
         const cv::Mat& _depthFrame;
         const cv::Mat& _depthToColorCoordFrame;
         cv::Mat& _debugFrame;
+        cv::Mat _rgbPdfFrame;
 
         int _maxStripRowCount; //maximum strip count (+1 for count of each column) of a row in the current frame
  
@@ -82,6 +83,9 @@ namespace ise
         cv::gpu::Stream _gpuStreamDepthWorking;
         cv::gpu::Stream _gpuStreamRgbWorking;
         cv::gpu::GpuMat _rgbFrameGpu;
+        cv::gpu::GpuMat _rgbFloatFrameGpu;
+        cv::gpu::GpuMat _rgbLuvFrameGpu;
+        cv::gpu::GpuMat _rgbPdfFrameGpu;
         cv::gpu::GpuMat _depthFrameGpu;
         cv::gpu::GpuMat _debugFrameGpu;   
         cv::gpu::GpuMat _sobelFrameGpu;
@@ -119,6 +123,9 @@ namespace ise
         FingerDetectionResults detect();
 
         ~Detector();
+
+        //temp
+        inline const cv::Mat& getPdfFrame() { return _rgbPdfFrame; }
     };
 }
 
