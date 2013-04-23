@@ -57,13 +57,13 @@ void glutDisplay()
 		printf("FPS = %6.2f\r", fps);
 	}
 
-    Sleep(100);
+    //Sleep(100);
 }
 
 int main(int argc, char** argv)
 {
-    const char pathPrefix[] = "C:\\Users\\cuda\\kinect\\record\\rec130421-2139";
-	//const char pathPrefix[] = "C:\\Users\\cuda\\kinect\\record\\rec130412-2036";
+    //const char pathPrefix[] = "C:\\Users\\cuda\\kinect\\record\\rec130421-2139";
+	const char pathPrefix[] = "C:\\Users\\cuda\\kinect\\record\\rec130412-2036";
 
 	//load settings
 	loadCommonSettings(pathPrefix, &_settings);

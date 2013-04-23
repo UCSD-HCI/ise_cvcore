@@ -37,7 +37,8 @@ Detector::Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, cons
     : _settings(settings), _rgbFrame(rgbFrame), _depthFrame(depthFrame), _depthToColorCoordFrame(depthToColorCoordFrame), _debugFrame(debugFrame),
     _rgbFrameGpu(settings.rgbHeight, settings.rgbWidth, CV_8UC3),
     _depthFrameGpu(settings.depthHeight, settings.depthWidth, CV_16U),
-     _sobelFrameGpu(settings.depthHeight, settings.depthWidth, CV_32F),
+    _sobelFrameGpu(settings.depthHeight, settings.depthWidth, CV_32F),
+    _sobelFrameBufferGpu(settings.depthHeight, settings.depthWidth, CV_32F),
     _debugFrameGpu(settings.depthHeight, settings.depthWidth, CV_8UC3),
     _debugSobelEqFrameGpu(settings.depthHeight, settings.depthWidth, CV_8U),
     _debugSobelEqHistGpu(1, 256, CV_32SC1),
@@ -121,7 +122,7 @@ FingerDetectionResults Detector::detect()
     */
 
     findFingers();
-   //floodHitTest();
+    floodHitTest();
 
 
 	FingerDetectionResults r;
@@ -496,17 +497,17 @@ void Detector::findFingers()
 					{
                         uchar* dstPixel = _debugFrame.ptr(rowFill) + colFill * 3;
                         
-						//dstPixel[0] = 255;
-						//dstPixel[2] = 255;
+						dstPixel[0] = 255;
+						dstPixel[2] = 255;
 
                         //read color
-                        const int* mapCoord = (int*)_depthToColorCoordFrame.ptr(rowFill) + colFill * 2;
+                        /*const int* mapCoord = (int*)_depthToColorCoordFrame.ptr(rowFill) + colFill * 2;
                         int cx = mapCoord[0];
                         int cy = mapCoord[1];
                         const uchar* rgbPixel = _rgbFrame.ptr(cy) + cx * 3;
                         //const uchar* rgbPixel = _rgbFrame.ptr(rowFill) + colFill * 3;
 
-                        memcpy(dstPixel, rgbPixel, 3);
+                        memcpy(dstPixel, rgbPixel, 3);*/
 					}
 				}
 
@@ -664,10 +665,13 @@ void Detector::gpuProcess()
 {
     _debugFrameGpu.setTo(Scalar(0,0,0));
 
-    _depthFrameGpu.upload(_depthFrame);
+    _gpuStreamDepthWorking.enqueueUpload(_depthFrame, _depthFrameGpu);
+    _gpuStreamRgbWorking.enqueueUpload(_rgbFrame, _rgbFrameGpu);
 	
-    cv::gpu::Sobel(_depthFrameGpu, _sobelFrameGpu, CV_32F, 1, 0, 5, -1);
-    
+    //cv::gpu::Sobel(_depthFrameGpu, _sobelFrameGpu, CV_32F, 1, 0);
+    cv::gpu::Sobel(_depthFrameGpu, _sobelFrameGpu, CV_32F, 1, 0, _sobelFrameBufferGpu, 5, -1.0f, BORDER_DEFAULT, -1, _gpuStreamDepthWorking);
+    _gpuStreamDepthWorking.waitForCompletion();
+
     //bind sobel for following usage
     cudaChannelFormatDesc desc = cudaCreateChannelDesc<float>();
     gpu::PtrStepSzb ptrStepSz(_sobelFrameGpu);
@@ -678,42 +682,42 @@ void Detector::gpuProcess()
     gpu::PtrStepSzb ptrStepSzDepth(_depthFrameGpu);
     cudaSafeCall(cudaBindTexture2D(NULL, texDepth, ptrStepSzDepth.data, descDepth, ptrStepSzDepth.cols, ptrStepSzDepth.rows, ptrStepSzDepth.step));
 
-    cudaStream_t cudaStream1 = gpu::StreamAccessor::getStream(_gpuStream1);
-    cudaStream_t cudaStream2 = gpu::StreamAccessor::getStream(_gpuStream2);
+    cudaStream_t cudaStreamDepthDebug = gpu::StreamAccessor::getStream(_gpuStreamDepthDebug);
+    cudaStream_t cudaStreamDepthWorking = gpu::StreamAccessor::getStream(_gpuStreamDepthWorking);
        
     //find strips on stream2: upload data
     //TODO: what if maximum thread < depthHeight? 
     //the third params: shared memory size in BYTES
     int* maxStripRowCountDevPtr;
     cudaSafeCall(cudaGetSymbolAddress((void**)&maxStripRowCountDevPtr, maxStripRowCountDev));
-    cudaSafeCall(cudaMemsetAsync(maxStripRowCountDevPtr, 0, sizeof(int), cudaStream2));
+    cudaSafeCall(cudaMemsetAsync(maxStripRowCountDevPtr, 0, sizeof(int), cudaStreamDepthWorking));
 
     //find strips on stream 2: kernel call
     //turns out 1 block is the best even though profiler suggests more blocks
     int nThread = _settings.depthHeight;    
     int nBlock = 1; //divUp(_settings.depthHeight, nThread);
-    findStripsKernel<<<nBlock, nThread, nThread * sizeof(int), cudaStream2>>>(_debugFrameGpu, _stripsDev);
+    findStripsKernel<<<nBlock, nThread, nThread * sizeof(int), cudaStreamDepthWorking>>>(_debugFrameGpu, _stripsDev);
     //cudaSafeCall(cudaGetLastError());
 
     //refine debug image on stream1: kernel call
     dim3 threads(16, 32);
     dim3 grid(divUp(_settings.depthWidth, threads.x), divUp(_settings.depthHeight, threads.y));
-    convertScaleAbsKernel<<<grid, threads, 0, cudaStream1>>>(_debugSobelEqFrameGpu);
+    convertScaleAbsKernel<<<grid, threads, 0, cudaStreamDepthDebug>>>(_debugSobelEqFrameGpu);
     //cudaSafeCall(cudaGetLastError());
 
-    gpu::equalizeHist(_debugSobelEqFrameGpu, _debugSobelEqFrameGpu, _debugSobelEqHistGpu, _debugSobelEqBufferGpu, _gpuStream1);
+    gpu::equalizeHist(_debugSobelEqFrameGpu, _debugSobelEqFrameGpu, _debugSobelEqHistGpu, _debugSobelEqBufferGpu, _gpuStreamDepthDebug);
     
     //find strips on stream 2: download data
-    cudaSafeCall(cudaMemcpyFromSymbolAsync(&_maxStripRowCount, maxStripRowCountDev, sizeof(int), 0, cudaMemcpyDeviceToHost, cudaStream2));
+    cudaSafeCall(cudaMemcpyFromSymbolAsync(&_maxStripRowCount, maxStripRowCountDev, sizeof(int), 0, cudaMemcpyDeviceToHost, cudaStreamDepthWorking));
 
     //download strips
     //download effective data, there are maxStripCount + 1 rows. The extra row stores count of strips for each column
     cudaSafeCall(cudaMemcpyAsync(_stripsHost, _stripsDev, _maxStripRowCount * _settings.depthHeight * sizeof(_OmniTouchStripDev), 
-        cudaMemcpyDeviceToHost, cudaStream2));
+        cudaMemcpyDeviceToHost, cudaStreamDepthWorking));
     //TODO: according to profiler, this trick seems not necessary. consider optimize for coelesence? 
   
-    _gpuStream1.waitForCompletion();
-    _gpuStream2.waitForCompletion();
+    _gpuStreamDepthDebug.waitForCompletion();
+    _gpuStreamDepthWorking.waitForCompletion();  
     cudaSafeCall(cudaGetLastError());
 
     //draw the debug image
@@ -724,5 +728,8 @@ void Detector::gpuProcess()
     cudaSafeCall(cudaUnbindTexture(texSobel));
     cudaSafeCall(cudaUnbindTexture(texDepth));
     
-    _debugFrameGpu.download(_debugFrame);
+    _gpuStreamDepthDebug.enqueueDownload(_debugFrameGpu, _debugFrame);
+    //_debugFrameGpu.download(_debugFrame);
+    _gpuStreamDepthDebug.waitForCompletion();
+    _gpuStreamRgbWorking.waitForCompletion();
 }
