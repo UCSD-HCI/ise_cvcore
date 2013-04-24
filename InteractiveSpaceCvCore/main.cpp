@@ -43,8 +43,8 @@ void glutDisplay()
 
 	//opengl draw
 	glClear(GL_COLOR_BUFFER_BIT);
-	//glDrawPixels(_settings.depthWidth, _settings.depthHeight, GL_RGB, GL_UNSIGNED_BYTE, _debugFrame.data);
-    glDrawPixels(_settings.depthWidth, _settings.depthHeight, GL_LUMINANCE, GL_FLOAT, _detector->getPdfFrame().data);
+	glDrawPixels(_settings.depthWidth, _settings.depthHeight, GL_RGB, GL_UNSIGNED_BYTE, _debugFrame.data);
+    //glDrawPixels(_settings.depthWidth, _settings.depthHeight, GL_LUMINANCE, GL_FLOAT, _detector->getPdfFrame().data);
 	glutSwapBuffers();
 
     /*
@@ -108,7 +108,7 @@ int main(int argc, char** argv)
 	glutInit(&argc, argv);
 	glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB);
 	glutInitWindowSize(_settings.depthWidth, _settings.depthHeight);
-	glutInitWindowPosition(1920, 500);
+	glutInitWindowPosition(500, 500);
 	glutCreateWindow("Window");
 	glutSetOption(GLUT_ACTION_ON_WINDOW_CLOSE, GLUT_ACTION_CONTINUE_EXECUTION);
 

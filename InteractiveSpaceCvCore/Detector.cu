@@ -37,8 +37,7 @@ __constant__ int _maxHistogramSizeDev[1];
 Detector::Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, const cv::Mat& depthFrame, const cv::Mat& depthToColorCoordFrame, cv::Mat& debugFrame)
     : _settings(settings), _rgbFrame(rgbFrame), _depthFrame(depthFrame), _depthToColorCoordFrame(depthToColorCoordFrame), _debugFrame(debugFrame),
     _rgbFrameGpu(settings.rgbHeight, settings.rgbWidth, CV_8UC3),
-    _rgbFloatFrameGpu(settings.rgbHeight, settings.rgbWidth, CV_32FC3),
-    _rgbLuvFrameGpu(settings.rgbHeight, settings.rgbWidth, CV_32FC3),
+    _rgbLabFrameGpu(settings.rgbHeight, settings.rgbWidth, CV_32FC3),
     _rgbPdfFrame(settings.rgbHeight, settings.rgbWidth, CV_32F),
     _rgbPdfFrameGpu(settings.rgbHeight, settings.rgbWidth, CV_32F),
     _depthFrameGpu(settings.depthHeight, settings.depthWidth, CV_16U),
@@ -460,6 +459,9 @@ void Detector::findFingers()
 			{
 				//fill back
 				int bufferPos = -1;
+                float colorPdfScore = 0;
+                int pixelCount = 0;
+
 				for (int rowFill = first->row; rowFill <= last->row; rowFill++)
 				{
 					int leftCol, rightCol;
@@ -484,26 +486,45 @@ void Detector::findFingers()
 					{
                         uchar* dstPixel = _debugFrame.ptr(rowFill) + colFill * 3;
                         
-						dstPixel[0] = 255;
-						dstPixel[2] = 255;
+						//dstPixel[0] = 255;
+						//dstPixel[2] = 255;
 
                         //read color
-                        /*const int* mapCoord = (int*)_depthToColorCoordFrame.ptr(rowFill) + colFill * 2;
+                        const int* mapCoord = (int*)_depthToColorCoordFrame.ptr(rowFill) + colFill * 2;
                         int cx = mapCoord[0];
                         int cy = mapCoord[1];
-                        const uchar* rgbPixel = _rgbFrame.ptr(cy) + cx * 3;
-                        //const uchar* rgbPixel = _rgbFrame.ptr(rowFill) + colFill * 3;
+                        const float* pdfPixel = (float*)_rgbPdfFrame.ptr(cy) + cx;
 
-                        memcpy(dstPixel, rgbPixel, 3);*/
+                        dstPixel[0] = (uchar)(*pdfPixel * 1000.0f * 255.0f + 0.5f);
+                        dstPixel[1] = dstPixel[0];
+                        dstPixel[2] = dstPixel[0];
+
+                        colorPdfScore += *pdfPixel;
+                        pixelCount++;
+
+                        //const uchar* rgbPixel = _rgbFrame.ptr(cy) + cx * 3;
+                        //memcpy(dstPixel, rgbPixel, 3);
 					}
 				}
 
-                _fingers.push_back(finger);
+                colorPdfScore /= pixelCount;
+
+                //printf("%f ", colorPdfScore);
+                if (colorPdfScore >= 1e-4)  //TODO: avoid hard coding
+                {
+                    _fingers.push_back(finger);
+                }     
+                else
+                {
+                    circle(_debugFrame, Point(finger.tipX, finger.tipY), 5, Scalar(224,80,1), -1);
+                }
+                
 			} // check length
 		
         }   // for each col
 	} //for each row
 
+    //printf("\n");
     sort(_fingers.begin(), _fingers.end());
 }
 
@@ -582,6 +603,9 @@ void Detector::floodHitTest()
 				break;
 			}
 		}
+
+
+        circle(_debugFrame, Point(it->tipX, it->tipY), 5, Scalar(0, 148, 42), -1);
 	}
 
 }
@@ -635,13 +659,13 @@ __global__ void refineDebugImageKernel(gpu::PtrStepb debugPtr, gpu::PtrStepb sob
 __global__ void applySkinColorModel(gpu::PtrStepf luvPtr, gpu::PtrStepf pdfPtr)
 {
     const int nComp = 3;
-    const float mu[nComp][2] = { {11.2025f, 8.2296f},
-                         {35.5613f, 30.1054f},
-                         {22.7229f, 19.4680f} };
-    const float conv[nComp][2] = { {37.691f, 43.929f},
-                            {225.23f, 242.08f},
-                            {54.738f, 61.146f} };
-    const float prop[nComp] = {0.28847f, 0.24641f, 0.46512f};
+    const float mu[nComp][2] = {{ 9.57907488860893f,          12.7703451268183f},
+                                { 25.0879013587047f,          35.3988094238412f},
+                                { 19.8826767803543f,          23.1472246974151f}};
+    const float conv[nComp][2] = { { 47.8492848747446f,          79.3673906277784f},
+                                    {  170.235884002246f,          156.732288245996f},
+                                    {  56.1710526374039f,          73.2031869267223f} };
+    const float prop[nComp] = { 0.328943172607604f,         0.271925127240458f,         0.399131700151939f};
 
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -665,47 +689,10 @@ __global__ void applySkinColorModel(gpu::PtrStepf luvPtr, gpu::PtrStepf pdfPtr)
         float* dst = pdfPtr.ptr(y) + x;
         //*dst = p * 500.f;
         //*dst = luv[0] / 100.0f;
-        *dst = p * 1000.f;
+        //*dst = p * 1000.f;
+        *dst = p;
     }
 }
-
-
-/*__global__ void applySkinColorModel(gpu::PtrStepf luvPtr, gpu::PtrStepf pdfPtr)
-{
-    const int nComp = 3;
-    const double mu[nComp][2] = {{11.2024686283253,          8.22956679034156},
-                                {35.5612918973632,          30.1054062096261},
-                                {22.7229203550896,          19.4680134168419}};
-    const double conv[nComp][2] = { { 37.6914561020612,          43.9294235115161},
-                                    { 225.22898713039,          242.081315811438},
-                                    { 54.7381847499349,          61.1464611751676} };
-    const double prop[nComp] = {0.28846824006064,         0.246407551490279,          0.46512420844908};
-
-    int x = blockIdx.x * blockDim.x + threadIdx.x;
-    int y = blockIdx.y * blockDim.y + threadIdx.y;
-
-    if (x < _settingsDev[0].rgbWidth && y < _settingsDev[0].rgbHeight)
-    {
-        float* luv = luvPtr.ptr(y) + x * 3;
-        double u = luv[1];
-        double v = luv[2];
-
-        double p = 0;
-        
-        #pragma unroll
-        for (int i = 0; i < nComp; i++)
-        {
-            double d = 1.0 / (2.0 * CUDART_PI_F * sqrt(conv[i][0] * conv[i][1]));
-            double e = exp(-0.5 * (pow(u - mu[i][0], 2) / conv[i][0] + pow(v - mu[i][1], 2) / conv[i][1]));
-            p += prop[i] * d * e;
-        }
-
-        float* dst = pdfPtr.ptr(y) + x;
-        //*dst = p * 500.f;
-        //*dst = luv[0] / 100.0f;
-        *dst = (float)(p * 1000.0);
-    }
-}*/
 
 void Detector::gpuProcess()
 {
@@ -749,13 +736,13 @@ void Detector::gpuProcess()
 
     //rgb manipulation
     _gpuStreamRgbWorking.enqueueUpload(_rgbFrame, _rgbFrameGpu);
-    _gpuStreamRgbWorking.enqueueConvert(_rgbFrameGpu, _rgbFloatFrameGpu, CV_32FC3, 1.f / 255.f);
-    gpu::cvtColor(_rgbFloatFrameGpu, _rgbLuvFrameGpu, CV_RGB2Luv, 0, _gpuStreamRgbWorking);
+    _gpuStreamRgbWorking.enqueueConvert(_rgbFrameGpu, _rgbLabFrameGpu, CV_32FC3, 1.f / 255.f);
+    gpu::cvtColor(_rgbLabFrameGpu, _rgbLabFrameGpu, CV_RGB2Luv, 0, _gpuStreamRgbWorking);
 
     //rgb skin color model
     dim3 rgbThreads(16, 32);
     dim3 rgbGrid(divUp(_settings.rgbWidth, rgbThreads.x), divUp(_settings.rgbHeight, rgbThreads.y));
-    applySkinColorModel<<<rgbGrid, rgbThreads, 0, cudaStreamRgbWorking>>>(_rgbLuvFrameGpu, _rgbPdfFrameGpu);
+    applySkinColorModel<<<rgbGrid, rgbThreads, 0, cudaStreamRgbWorking>>>(_rgbLabFrameGpu, _rgbPdfFrameGpu);
     cudaSafeCall(cudaGetLastError());
 
     //refine debug image on stream1: kernel call

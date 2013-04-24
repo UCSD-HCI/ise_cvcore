@@ -36,13 +36,13 @@ KinectSimulator::KinectSimulator(const CommonSettings& settings, const char* rec
 		_frameCount = depthFrameCount;
 	}
 
-    /*
+    
     HRESULT hr = NuiCreateSensorByIndex(0, &_sensor);
     assert(SUCCEEDED(hr));
 
     hr = _sensor->NuiInitialize(NUI_INITIALIZE_FLAG_USES_COLOR | NUI_INITIALIZE_FLAG_USES_DEPTH); 
     assert(SUCCEEDED(hr));
-    */
+    
 }
 
 KinectSimulator::~KinectSimulator()
@@ -72,7 +72,7 @@ int KinectSimulator::capture()
     fread(_depthFrame.data, sizeof(ushort), _settings.depthWidth * _settings.depthHeight, _depthFp);
 
     //compute depth to color coordinate frame
-    /*HRESULT hr = _sensor->NuiImageGetColorPixelCoordinateFrameFromDepthPixelFrameAtResolution(
+    HRESULT hr = _sensor->NuiImageGetColorPixelCoordinateFrameFromDepthPixelFrameAtResolution(
         NUI_IMAGE_RESOLUTION_640x480,
         NUI_IMAGE_RESOLUTION_640x480,
         _settings.depthWidth * _settings.depthHeight,
@@ -80,7 +80,7 @@ int KinectSimulator::capture()
         _settings.depthWidth * _settings.depthHeight * 2,
         (long*)_depthToRgbCoordFrame.data
     );
-    assert(SUCCEEDED(hr));*/
+    assert(SUCCEEDED(hr));
     
 	_currentFrame++;
 

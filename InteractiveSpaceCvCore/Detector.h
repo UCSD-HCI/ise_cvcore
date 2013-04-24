@@ -83,8 +83,7 @@ namespace ise
         cv::gpu::Stream _gpuStreamDepthWorking;
         cv::gpu::Stream _gpuStreamRgbWorking;
         cv::gpu::GpuMat _rgbFrameGpu;
-        cv::gpu::GpuMat _rgbFloatFrameGpu;
-        cv::gpu::GpuMat _rgbLuvFrameGpu;
+        cv::gpu::GpuMat _rgbLabFrameGpu;
         cv::gpu::GpuMat _rgbPdfFrameGpu;
         cv::gpu::GpuMat _depthFrameGpu;
         cv::gpu::GpuMat _debugFrameGpu;   

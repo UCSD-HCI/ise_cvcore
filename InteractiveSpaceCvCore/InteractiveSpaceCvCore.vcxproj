@@ -74,7 +74,7 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>opencv_core245.lib;opencv_calib3d245.lib;opencv_highgui245.lib;opencv_video245.lib;opencv_ml245.lib;opencv_legacy245.lib;opencv_imgproc245.lib;opencv_gpu245.lib;freeglut.lib;glew32.lib;cudart.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>opencv_core245.lib;opencv_calib3d245.lib;opencv_highgui245.lib;opencv_video245.lib;opencv_ml245.lib;opencv_legacy245.lib;opencv_imgproc245.lib;opencv_gpu245.lib;freeglut.lib;glew32.lib;cudart.lib;Kinect10.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <CudaCompile>
       <TargetMachinePlatform>64</TargetMachinePlatform>
