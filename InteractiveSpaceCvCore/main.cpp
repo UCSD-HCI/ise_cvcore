@@ -67,20 +67,21 @@ void glutDisplay()
 		printf("FPS = %6.2f\r", fps);
 	}
 
-    //Sleep(100);
+    Sleep(100);
 }
 
 int main(int argc, char** argv)
 {
-    //const char pathPrefix[] = "C:\\Users\\cuda\\kinect\\record\\rec130421-2139";
-	const char pathPrefix[] = "C:\\Users\\cuda\\kinect\\record\\rec130412-2036";
+    const char pathPrefix[] = "C:\\Users\\cuda\\kinect\\record\\rec130421-2139";      //test color
+	//const char pathPrefix[] = "C:\\Users\\cuda\\kinect\\record\\rec130412-2036";    //normal
+    //const char pathPrefix[] = "C:\\Users\\cuda\\kinect\\record\\rec130417-1429";    //crazy
 
 	//load settings
 	loadCommonSettings(pathPrefix, &_settings);
 	DynamicParameters dynamicParams;
 	loadDynamicParameters(pathPrefix, &dynamicParams);
 
-	//init rgb/depth frame
+	//init rgb/depth frame  
 	_rgbFrame.create(_settings.rgbHeight, _settings.rgbWidth, CV_8UC3);
 	_depthFrame.create(_settings.depthHeight, _settings.depthWidth, CV_16U);
 	_debugFrame.create(_settings.depthHeight, _settings.depthWidth, CV_8UC3);

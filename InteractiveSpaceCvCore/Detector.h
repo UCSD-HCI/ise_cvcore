@@ -94,15 +94,37 @@ namespace ise
         cv::gpu::GpuMat _debugSobelEqBufferGpu;
         _OmniTouchStripDev* _stripsDev;
 
-        inline ushort* ushortValAt(cv::Mat& mat, int row, int col);
-        inline const ushort* ushortValAt(const cv::Mat& mat, int row, int col);
-        inline float* floatValAt(cv::Mat& mat, int row, int col);
-        inline uchar* rgb888ValAt(cv::Mat& mat, int row, int col);
+        inline static ushort* ushortValAt(cv::Mat& mat, int row, int col)
+        {
+            assert(mat.type() == CV_16U);
+            return (ushort*)(mat.data + row * mat.step + col * sizeof(ushort));
+        }
+
+        inline static const ushort* ushortValAt(const cv::Mat& mat, int row, int col)
+        {
+            assert(mat.type() == CV_16U);
+            return (ushort*)(mat.data + row * mat.step + col * sizeof(ushort));
+        }
+
+        inline float* floatValAt(cv::Mat& mat, int row, int col)
+        {
+            assert(mat.type() == CV_32F);
+            return (float*)(mat.data + row * mat.step + col * sizeof(float));
+        }
+
+        inline uchar* rgb888ValAt(cv::Mat& mat, int row, int col)
+        {
+            assert(mat.type() == CV_8UC3);
+            return (uchar*)(mat.data + row * mat.step + col * 3);
+        }
 
         //TODO: move these to a common h file
-        inline static int divUp(int total, int grain);
+        inline static int divUp(int total, int grain) { return (total + grain - 1) / grain; }
         inline static void cudaSafeCall(cudaError_t err);
         
+        void cudaInit();
+        void cudaRelease();
+
         void gpuProcess();
         inline void sobel();
         void findStrips();

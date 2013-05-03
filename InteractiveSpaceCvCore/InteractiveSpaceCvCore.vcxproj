@@ -85,6 +85,7 @@
     <CudaCompile Include="Detector.cu">
       <FileType>CppCode</FileType>
     </CudaCompile>
+    <ClCompile Include="Detector.cpp" />
     <ClCompile Include="KinectSimulator.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="SettingsReader.cpp" />
