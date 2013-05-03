@@ -16,11 +16,26 @@ using namespace std;
 using namespace cv;
 using namespace ise;
 
-Detector::Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, const cv::Mat& depthFrame, const cv::Mat& depthToColorCoordFrame, cv::Mat& debugFrame)
-    : _settings(settings), _rgbFrame(rgbFrame), _depthFrame(depthFrame), _depthToColorCoordFrame(depthToColorCoordFrame), _debugFrame(debugFrame),
+Detector::Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, const cv::Mat& depthFrame, const cv::Mat& depthToColorCoordFrame, cv::Mat& debugFrame) :
+    //initialization list
+    //settings
+    _settings(settings), 
+    
+    //external images
+    _rgbFrame(rgbFrame), 
+    _depthFrame(depthFrame), 
+    _depthToColorCoordFrame(depthToColorCoordFrame), 
+    _debugFrame(debugFrame),
+
+    //host images
+    _rgbPdfFrame(settings.rgbHeight, settings.rgbWidth, CV_32F),
+
+    //host images, transposed
+    //TODO
+
+    //gpu images
     _rgbFrameGpu(settings.rgbHeight, settings.rgbWidth, CV_8UC3),
     _rgbLabFrameGpu(settings.rgbHeight, settings.rgbWidth, CV_32FC3),
-    _rgbPdfFrame(settings.rgbHeight, settings.rgbWidth, CV_32F),
     _rgbPdfFrameGpu(settings.rgbHeight, settings.rgbWidth, CV_32F),
     _depthFrameGpu(settings.depthHeight, settings.depthWidth, CV_16U),
     _sobelFrameGpu(settings.depthHeight, settings.depthWidth, CV_32F),
@@ -29,6 +44,9 @@ Detector::Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, cons
     _debugSobelEqFrameGpu(settings.depthHeight, settings.depthWidth, CV_8U),
     _debugSobelEqHistGpu(1, 256, CV_32SC1),
     _debugSobelEqBufferGpu(settings.depthHeight, settings.depthWidth, CV_8U)
+
+    //gpu images, transposed
+    //TODO
 {
 	
     //page lock

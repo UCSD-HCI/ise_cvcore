@@ -215,7 +215,6 @@ __global__ void findStripsKernel(gpu::PtrStepb debugPtr, _OmniTouchStripDev* res
     __syncthreads();
     //map-recude to find the local maximum strip count
     int total = blockDim.x;
-    //int mid = (blockDim.x + 1) / 2;    //div up
     while (total > 1) 
     {
         int mid = (total + 1) / 2;

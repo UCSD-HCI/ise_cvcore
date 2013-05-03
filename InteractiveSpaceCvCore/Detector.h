@@ -58,41 +58,63 @@ namespace ise
         static const int FLOOD_FILL_RADIUS = 128;
 
     private:
+        //settings
         CommonSettings _settings;
         DynamicParameters _parameters;
         int _maxHistogramSize;
-        //int* _histogram;
-        uchar* _floodHitTestVisitedFlag;
-        std::vector<OmniTouchFinger> _fingers;
 
+        //data for find strips
+        _OmniTouchStripDev* _stripsHost;
+        _OmniTouchStripDev* _stripsDev;
+        int _maxStripRowCount; //maximum strip count (+1 for count of each column) of a row in the current frame
+        
+        //data for find strips, transposed
+        _OmniTouchStripDev* _transposedStripsHost;
+        _OmniTouchStripDev* _transposedStripsDev;
+        int _transposedMaxStripRowCount;
+        
+        //data for find fingers and flood hit
+        std::vector<_OmniTouchStripDev*> _stripBuffer;      //warning: shared, must change for multi-threading
+        std::vector<OmniTouchFinger> _fingers;
+        uchar* _stripVisitedFlags;                          //warning: shared, must change for multi-threading
+        uchar* _floodHitTestVisitedFlag;                    //warning: shared, must change for multi-threading
+
+        //data for find fingers and flood hit, transposed
+        uchar* _transposedStripVisitedFlags;
+
+        //external images
         const cv::Mat& _rgbFrame;
         const cv::Mat& _depthFrame;
         const cv::Mat& _depthToColorCoordFrame;
         cv::Mat& _debugFrame;
+
+        //host images
         cv::Mat _rgbPdfFrame;
-
-        int _maxStripRowCount; //maximum strip count (+1 for count of each column) of a row in the current frame
- 
-        int _fingerCount;
-        _OmniTouchStripDev* _stripsHost;
-        std::vector<_OmniTouchStripDev*> _stripBuffer;
-        uchar* _stripVisitedFlags;
-
-        //gpu variables
-        cv::gpu::Stream _gpuStreamDepthDebug;
-        cv::gpu::Stream _gpuStreamDepthWorking;
-        cv::gpu::Stream _gpuStreamRgbWorking;
+        
+        //host images, transposed
+        cv::Mat _transposedDepthFrame;
+            
+        //gpu images
         cv::gpu::GpuMat _rgbFrameGpu;
         cv::gpu::GpuMat _rgbLabFrameGpu;
         cv::gpu::GpuMat _rgbPdfFrameGpu;
-        cv::gpu::GpuMat _depthFrameGpu;
-        cv::gpu::GpuMat _debugFrameGpu;   
+        cv::gpu::GpuMat _depthFrameGpu;  
         cv::gpu::GpuMat _sobelFrameGpu;
         cv::gpu::GpuMat _sobelFrameBufferGpu;
+        cv::gpu::GpuMat _debugFrameGpu; 
         cv::gpu::GpuMat _debugSobelEqFrameGpu;
         cv::gpu::GpuMat _debugSobelEqHistGpu;
         cv::gpu::GpuMat _debugSobelEqBufferGpu;
-        _OmniTouchStripDev* _stripsDev;
+        
+        //gpu images, transposed
+        cv::gpu::GpuMat _transposedDepthFrameGpu;
+        cv::gpu::GpuMat _transposedSobelFrameGpu;
+        cv::gpu::GpuMat _transposedSobelFrameBufferGpu;
+
+        //gpu streams
+        cv::gpu::Stream _gpuStreamDepthDebug;
+        cv::gpu::Stream _gpuStreamDepthWorking;
+        cv::gpu::Stream _gpuStreamRgbWorking;
 
         inline static ushort* ushortValAt(cv::Mat& mat, int row, int col)
         {
