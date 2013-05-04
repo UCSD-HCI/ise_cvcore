@@ -120,6 +120,8 @@ namespace ise
         //gpu streams
         cv::gpu::Stream _gpuStreamDepthDebug;
         cv::gpu::Stream _gpuStreamDepthWorking;
+        cv::gpu::Stream _gpuStreamTransposedDepthDebug;
+        cv::gpu::Stream _gpuStreamTransposedDepthWorking;
         cv::gpu::Stream _gpuStreamRgbWorking;
 
         inline static ushort* ushortValAt(cv::Mat& mat, int row, int col)

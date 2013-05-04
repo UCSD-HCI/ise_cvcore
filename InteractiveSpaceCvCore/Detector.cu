@@ -19,15 +19,37 @@ using namespace std;
 using namespace cv;
 using namespace ise;
 
+typedef enum __ImageDirection
+{
+    DirDefault,
+    DirTransposed
+} _ImageDirection;
 
 //declare textures
 texture<ushort, 2> texDepth;
 texture<float, 2> texSobel;
+texture<ushort, 2> texTrDepth;
+texture<float, 2> texTrSobel;
 
 __constant__ CommonSettings _settingsDev[1];
 __constant__ DynamicParameters _dynamicParametersDev[1];
 //__constant__ int _floodFillNeighborOffset[6];
 __constant__ int _maxHistogramSizeDev[1];
+
+template <_ImageDirection dir>
+__device__ int depthWidth()
+{
+    return (dir == DirTransposed ? _settingsDev[0].depthHeight : _settingsDev[0].depthWidth);
+}
+
+template <_ImageDirection dir>
+__device__ int depthHeight()
+{
+    return (dir == DirTransposed ? _settingsDev[0].depthWidth : _settingsDev[0].depthHeight);
+}
+
+//choose texture according to direction
+#define dirTex2D(dir, tex, texTr, x, y) ((dir) == DirTransposed ? tex2D((texTr), (x), (y)) : tex2D((tex), (x), (y)))
 
 void Detector::cudaSafeCall(cudaError_t err)
 {
@@ -50,6 +72,11 @@ void Detector::cudaInit()
     cudaSafeCall(cudaMallocHost(&_stripsHost, (MAX_STRIPS_PER_ROW + 1) * _settings.depthHeight * sizeof(_OmniTouchStripDev)));
     cudaSafeCall(cudaMalloc(&_stripsDev, (MAX_STRIPS_PER_ROW + 1) * _settings.depthHeight * sizeof(_OmniTouchStripDev)));
 
+    //strips transposed
+    cudaSafeCall(cudaMallocHost(&_transposedStripsHost, (MAX_STRIPS_PER_ROW + 1) * _settings.depthWidth * sizeof(_OmniTouchStripDev)));
+    cudaSafeCall(cudaMalloc(&_transposedStripsDev, (MAX_STRIPS_PER_ROW + 1) * _settings.depthWidth * sizeof(_OmniTouchStripDev)));
+
+
     //init histogram for debug
 	_maxHistogramSize = _settings.maxDepthValue * 48 * 2;
     cudaSafeCall(cudaMemcpyToSymbol(_maxHistogramSizeDev, &_maxHistogramSize, sizeof(int)));
@@ -60,6 +87,9 @@ void Detector::cudaRelease()
 {
     cudaSafeCall(cudaFree(_stripsDev));
     cudaSafeCall(cudaFreeHost(_stripsHost));
+
+    cudaSafeCall(cudaFree(_transposedStripsDev));
+    cudaSafeCall(cudaFreeHost(_transposedStripsHost));
 }
 
 //update the parameters used by the algorithm
@@ -92,7 +122,9 @@ __device__ float getSquaredDistanceInRealWorld(_IntPoint3D p1, _IntPoint3D p2)
 }
 
 __device__ int maxStripRowCountDev;
+__device__ int trMaxStripRowCountDev;
 
+template <_ImageDirection dir>
 __global__ void findStripsKernel(gpu::PtrStepb debugPtr, _OmniTouchStripDev* resultPtr)
 {
     extern __shared__ int stripCount[];
@@ -100,15 +132,18 @@ __global__ void findStripsKernel(gpu::PtrStepb debugPtr, _OmniTouchStripDev* res
     
     stripCount[threadIdx.x] = 1;
 
-    if (row < _settingsDev[0].depthHeight)
+    int width = depthWidth<dir>();
+    int height = depthHeight<dir>();
+
+    if (row < height)
     {
 	    StripState state = StripSmooth;
 	    int partialMin, partialMax;
 	    int partialMinPos, partialMaxPos;
 
-	    for (int col = 0; col < _settingsDev[0].depthWidth; col++)
+	    for (int col = 0; col < width; col++)
 	    {
-		    float currVal = tex2D(texSobel, col, row);
+		    float currVal = dirTex2D(dir, texSobel, texTrSobel, col, row);
         
         
 		    switch(state)
@@ -164,7 +199,7 @@ __global__ void findStripsKernel(gpu::PtrStepb debugPtr, _OmniTouchStripDev* res
 			    }
 			    else
 			    {
-                    ushort depth = tex2D(texDepth, (partialMaxPos + partialMinPos) / 2, row);
+                    ushort depth = dirTex2D(dir, texDepth, texTrDepth, (partialMaxPos + partialMinPos) / 2, row);
 				
                     _IntPoint3D p1, p2;
                     p1.x = partialMaxPos;
@@ -186,7 +221,7 @@ __global__ void findStripsKernel(gpu::PtrStepb debugPtr, _OmniTouchStripDev* res
 						    pixel[1] = 255;
 					    }
 
-                        int resultOffset = stripCount[threadIdx.x] * _settingsDev[0].depthHeight + row;
+                        int resultOffset = stripCount[threadIdx.x] * height + row;
                         resultPtr[resultOffset].start = partialMaxPos;
                         resultPtr[resultOffset].end = partialMinPos;
                         resultPtr[resultOffset].row = row;
@@ -231,29 +266,38 @@ __global__ void findStripsKernel(gpu::PtrStepb debugPtr, _OmniTouchStripDev* res
 
     if (threadIdx.x == 0)
     {
-        atomicMax(&maxStripRowCountDev, stripCount[0]);
+        atomicMax( (dir == DirTransposed ? &trMaxStripRowCountDev : &maxStripRowCountDev), stripCount[0]);
     }
 }
 
+template <_ImageDirection dir>
 __global__ void convertScaleAbsKernel(gpu::PtrStepb debugSobelEqPtr)
 {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
 
-    if (x < _settingsDev[0].depthWidth && y < _settingsDev[0].depthHeight)
+    int width = depthWidth<dir>();
+    int height = depthHeight<dir>();
+
+    if (x < width && y < height)
     {
-        float sobel = tex2D(texSobel, x, y);
+        float sobel = dirTex2D(dir, texSobel, texTrSobel, x, y);
+
         uchar res = (uchar)(fabsf(sobel) / (float)(_maxHistogramSizeDev[0]) * 255.0f + 0.5f);
         *(debugSobelEqPtr.ptr(y) + x) = res;
     }
 }
 
-__global__ void refineDebugImageKernel(gpu::PtrStepb debugPtr, gpu::PtrStepb sobelEqPtr)
+template <_ImageDirection dir>
+__global__ void refineDebugImageKernel(gpu::PtrStepSzb debugPtr, gpu::PtrStepb sobelEqPtr)
 {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
 
-    if (x < _settingsDev[0].depthWidth && y < _settingsDev[0].depthHeight)
+    int width = depthWidth<dir>();
+    int height = depthHeight<dir>();
+
+    if (x < width && y < height)
     {
         uchar* dstPixel = debugPtr.ptr(y) + x * 3;
 
@@ -264,7 +308,7 @@ __global__ void refineDebugImageKernel(gpu::PtrStepb debugPtr, gpu::PtrStepb sob
 		else
 		{
             uchar sobelEq = *(sobelEqPtr.ptr(y) + x);
-            float sobelVal = tex2D(texSobel, x, y);
+            float sobelVal = dirTex2D(dir, texSobel, texTrSobel, x, y);
 
             if (sobelVal >= 0)
             {
@@ -323,9 +367,12 @@ void Detector::gpuProcess()
 {
     cudaStream_t cudaStreamDepthDebug = gpu::StreamAccessor::getStream(_gpuStreamDepthDebug);
     cudaStream_t cudaStreamDepthWorking = gpu::StreamAccessor::getStream(_gpuStreamDepthWorking);
+    cudaStream_t cudaStreamTransposedDepthDebug = gpu::StreamAccessor::getStream(_gpuStreamTransposedDepthDebug);
+    cudaStream_t cudaStreamTransposedDepthWorking = gpu::StreamAccessor::getStream(_gpuStreamTransposedDepthWorking);
     cudaStream_t cudaStreamRgbWorking = gpu::StreamAccessor::getStream(_gpuStreamRgbWorking);
     
     _depthFrameGpu.upload(_depthFrame);
+    _transposedDepthFrameGpu.upload(_transposedDepthFrame);
     //_gpuStreamDepthWorking.enqueueUpload(_depthFrame, _depthFrameGpu);
     
     //Looks like when running Sobel async, visual profiler won't generate any timeline.
@@ -333,18 +380,30 @@ void Detector::gpuProcess()
     //cv::gpu::Sobel(_depthFrameGpu, _sobelFrameGpu, CV_32F, 1, 0, _sobelFrameBufferGpu, 5, -1.0f, BORDER_DEFAULT, -1, _gpuStreamDepthWorking);
     //_gpuStreamDepthWorking.waitForCompletion();
 
+    cv::gpu::Sobel(_transposedDepthFrameGpu, _transposedSobelFrameGpu, CV_32F, 1, 0, _transposedSobelFrameBufferGpu, 5, -1);
+
     _gpuStreamDepthWorking.enqueueMemSet(_debugFrameGpu, Scalar(0,0,0));
+    _gpuStreamTransposedDepthWorking.enqueueMemSet(_transposedDebugFrameGpu, Scalar(0,0,0));
     
-    //bind sobel for following usage
-    cudaChannelFormatDesc desc = cudaCreateChannelDesc<float>();
-    gpu::PtrStepSzb ptrStepSz(_sobelFrameGpu);
-    cudaSafeCall(cudaBindTexture2D(NULL, texSobel, ptrStepSz.data, desc, ptrStepSz.cols, ptrStepSz.rows, ptrStepSz.step));
+    //bind sobel for future usage
+    cudaChannelFormatDesc descSobel = cudaCreateChannelDesc<float>();
+    gpu::PtrStepSzb ptrSobel(_sobelFrameGpu);
+    cudaSafeCall(cudaBindTexture2D(NULL, texSobel, ptrSobel.data, descSobel, ptrSobel.cols, ptrSobel.rows, ptrSobel.step));
+
+    cudaChannelFormatDesc descTrSobel = cudaCreateChannelDesc<float>();
+    gpu::PtrStepSzb ptrTrSobel(_transposedSobelFrameGpu);
+    cudaSafeCall(cudaBindTexture2D(NULL, texTrSobel, ptrTrSobel.data, descTrSobel, ptrTrSobel.cols, ptrTrSobel.rows, ptrTrSobel.step));
 
     //bind depth
     cudaChannelFormatDesc descDepth = cudaCreateChannelDesc<ushort>();
-    gpu::PtrStepSzb ptrStepSzDepth(_depthFrameGpu);
-    cudaSafeCall(cudaBindTexture2D(NULL, texDepth, ptrStepSzDepth.data, descDepth, ptrStepSzDepth.cols, ptrStepSzDepth.rows, ptrStepSzDepth.step));
+    gpu::PtrStepSzb ptrDepth(_depthFrameGpu);
+    cudaSafeCall(cudaBindTexture2D(NULL, texDepth, ptrDepth.data, descDepth, ptrDepth.cols, ptrDepth.rows, ptrDepth.step));
     
+    cudaChannelFormatDesc descTrDepth = cudaCreateChannelDesc<ushort>();
+    gpu::PtrStepSzb ptrTrDepth(_transposedDepthFrameGpu);
+    cudaSafeCall(cudaBindTexture2D(NULL, texTrDepth, ptrTrDepth.data, descTrDepth, ptrTrDepth.cols, ptrTrDepth.rows, ptrTrDepth.step));
+
+
     //find strips on stream2: upload data
     //TODO: what if maximum thread < depthHeight? 
     //the third params: shared memory size in BYTES
@@ -352,12 +411,21 @@ void Detector::gpuProcess()
     cudaSafeCall(cudaGetSymbolAddress((void**)&maxStripRowCountDevPtr, maxStripRowCountDev));
     cudaSafeCall(cudaMemsetAsync(maxStripRowCountDevPtr, 0, sizeof(int), cudaStreamDepthWorking));
 
+    int* trMaxStripRowCountDevPtr;
+    cudaSafeCall(cudaGetSymbolAddress((void**)&trMaxStripRowCountDevPtr, trMaxStripRowCountDev));
+    cudaSafeCall(cudaMemsetAsync(trMaxStripRowCountDevPtr, 0, sizeof(int), cudaStreamTransposedDepthWorking));
+
     //find strips on stream 2: kernel call
     //turns out 1 block is the best even though profiler suggests more blocks
-    int nThread = _settings.depthHeight;    
-    int nBlock = 1; //divUp(_settings.depthHeight, nThread);
-    findStripsKernel<<<nBlock, nThread, nThread * sizeof(int), cudaStreamDepthWorking>>>(_debugFrameGpu, _stripsDev);
-    //cudaSafeCall(cudaGetLastError());
+    int stripThread = _settings.depthHeight;    
+    int stripBlock = 1; //divUp(_settings.depthHeight, nThread);
+    findStripsKernel<DirDefault><<<stripBlock, stripThread, stripThread * sizeof(int), cudaStreamDepthWorking>>>(_debugFrameGpu, _stripsDev);
+    
+    int trStripThread = _settings.depthWidth;    
+    int trStripBlock = 1; //divUp(_settings.depthHeight, nThread);
+    findStripsKernel<DirTransposed><<<trStripBlock, trStripThread, trStripThread * sizeof(int), cudaStreamTransposedDepthWorking>>>
+        (_transposedDebugFrameGpu, _transposedStripsDev);
+    
 
     //rgb manipulation
     _gpuStreamRgbWorking.enqueueUpload(_rgbFrame, _rgbFrameGpu);
@@ -370,42 +438,59 @@ void Detector::gpuProcess()
     applySkinColorModel<<<rgbGrid, rgbThreads, 0, cudaStreamRgbWorking>>>(_rgbLabFrameGpu, _rgbPdfFrameGpu);
     cudaSafeCall(cudaGetLastError());
 
-    //refine debug image on stream1: kernel call
+    //refine debug image
     dim3 threads(16, 32);
     dim3 grid(divUp(_settings.depthWidth, threads.x), divUp(_settings.depthHeight, threads.y));
-    convertScaleAbsKernel<<<grid, threads, 0, cudaStreamDepthDebug>>>(_debugSobelEqFrameGpu);
-    //cudaSafeCall(cudaGetLastError());
-
+    convertScaleAbsKernel<DirDefault><<<grid, threads, 0, cudaStreamDepthDebug>>>(_debugSobelEqFrameGpu);
     gpu::equalizeHist(_debugSobelEqFrameGpu, _debugSobelEqFrameGpu, _debugSobelEqHistGpu, _debugSobelEqBufferGpu, _gpuStreamDepthDebug);
     
+    //refine transposed debug image
+    dim3 trThreads(16, 32);
+    dim3 trGrid(divUp(_settings.depthHeight, threads.x), divUp(_settings.depthWidth, threads.y));
+    convertScaleAbsKernel<DirTransposed><<<trGrid, trThreads, 0, cudaStreamTransposedDepthDebug>>>(_transposedDebugSobelEqFrameGpu);
+    gpu::equalizeHist(_transposedDebugSobelEqFrameGpu, _transposedDebugSobelEqFrameGpu, _transposedDebugSobelEqHistGpu, 
+        _transposedDebugSobelEqBufferGpu, _gpuStreamTransposedDepthDebug);
+
     //rgb download
     _gpuStreamRgbWorking.enqueueDownload(_rgbPdfFrameGpu, _rgbPdfFrame);
 
-    //find strips on stream 2: download data
+    //find strips: download data
     cudaSafeCall(cudaMemcpyFromSymbolAsync(&_maxStripRowCount, maxStripRowCountDev, sizeof(int), 0, cudaMemcpyDeviceToHost, cudaStreamDepthWorking));
-
     //download strips
     //download effective data, there are maxStripCount + 1 rows. The extra row stores count of strips for each column
     cudaSafeCall(cudaMemcpyAsync(_stripsHost, _stripsDev, _maxStripRowCount * _settings.depthHeight * sizeof(_OmniTouchStripDev), 
         cudaMemcpyDeviceToHost, cudaStreamDepthWorking));
     //TODO: according to profiler, this trick seems not necessary. consider optimize for coelesence? 
   
+    cudaSafeCall(cudaMemcpyFromSymbolAsync(&_transposedMaxStripRowCount, trMaxStripRowCountDev, sizeof(int), 0, 
+        cudaMemcpyDeviceToHost, cudaStreamTransposedDepthWorking));
+    cudaSafeCall(cudaMemcpyAsync(_transposedStripsHost, _transposedStripsDev, _transposedMaxStripRowCount * _settings.depthWidth * sizeof(_OmniTouchStripDev), 
+        cudaMemcpyDeviceToHost, cudaStreamDepthWorking));
+    
+
     _gpuStreamDepthDebug.waitForCompletion();
     _gpuStreamDepthWorking.waitForCompletion();  
+    _gpuStreamTransposedDepthDebug.waitForCompletion();
+    _gpuStreamTransposedDepthWorking.waitForCompletion();
     cudaSafeCall(cudaGetLastError());
 
     //draw the debug image
-    refineDebugImageKernel<<<grid, threads, 0, cudaStreamDepthDebug>>>(_debugFrameGpu, _debugSobelEqFrameGpu);
+    refineDebugImageKernel<DirDefault><<<grid, threads, 0, cudaStreamDepthDebug>>>(_debugFrameGpu, _debugSobelEqFrameGpu);
+    refineDebugImageKernel<DirTransposed><<<trGrid, trThreads, 0, cudaStreamTransposedDepthDebug>>>(_transposedDebugFrameGpu, _transposedDebugSobelEqFrameGpu);
     cudaSafeCall(cudaGetLastError());
     
     //_debugFrameGpu.download(_debugFrame);
     _gpuStreamDepthDebug.enqueueDownload(_debugFrameGpu, _debugFrame);
+    _gpuStreamTransposedDepthDebug.enqueueDownload(_transposedDebugFrameGpu, _transposedDebugFrame);
+    
     _gpuStreamDepthDebug.waitForCompletion();
-
+    _gpuStreamTransposedDepthDebug.waitForCompletion();
 
     //unbind textures
     cudaSafeCall(cudaUnbindTexture(texSobel));
     cudaSafeCall(cudaUnbindTexture(texDepth));
+    cudaSafeCall(cudaUnbindTexture(texTrSobel));
+    cudaSafeCall(cudaUnbindTexture(texTrDepth));
     
 
     _gpuStreamRgbWorking.waitForCompletion();

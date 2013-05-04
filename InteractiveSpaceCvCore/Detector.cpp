@@ -59,6 +59,7 @@ Detector::Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, cons
 	
     //page lock
     gpu::registerPageLocked(_rgbPdfFrame);
+    gpu::registerPageLocked(_transposedDepthFrame);
 
      //init memory for storing fingers
     _stripVisitedFlags = new uchar[(MAX_STRIPS_PER_ROW + 1) * settings.depthHeight];
@@ -75,6 +76,7 @@ Detector::Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, cons
 Detector::~Detector()
 {
     cudaRelease();
+    gpu::unregisterPageLocked(_transposedDepthFrame);
     gpu::unregisterPageLocked(_rgbPdfFrame);
     
     delete [] _stripVisitedFlags;
@@ -86,11 +88,15 @@ Detector::~Detector()
 //have a look at main() to learn how to use this.
 FingerDetectionResults Detector::detect()
 {
+    transpose(_depthFrame, _transposedDepthFrame);
+
     gpuProcess();
 
     findFingers();
     floodHitTest();
     
+    transpose(_transposedDebugFrame, _debugFrame2);
+
 	FingerDetectionResults r;
 
 	r.error = 0;

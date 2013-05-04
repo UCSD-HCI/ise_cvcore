@@ -79,8 +79,9 @@ void glutDisplay()
 int main(int argc, char** argv)
 {
     //const char pathPrefix[] = "C:\\Users\\cuda\\kinect\\record\\rec130421-2139";      //test color
-	const char pathPrefix[] = "C:\\Users\\cuda\\kinect\\record\\rec130412-2036";    //normal
+	//const char pathPrefix[] = "C:\\Users\\cuda\\kinect\\record\\rec130412-2036";    //normal
     //const char pathPrefix[] = "C:\\Users\\cuda\\kinect\\record\\rec130417-1429";    //crazy
+    const char pathPrefix[] = "C:\\Users\\cuda\\kinect\\record\\rec130503-1806";      //rotation
 
 	//load settings
 	loadCommonSettings(pathPrefix, &_settings);
