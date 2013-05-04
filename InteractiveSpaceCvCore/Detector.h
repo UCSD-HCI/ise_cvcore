@@ -87,11 +87,13 @@ namespace ise
         const cv::Mat& _depthFrame;
         const cv::Mat& _depthToColorCoordFrame;
         cv::Mat& _debugFrame;
+        cv::Mat& _debugFrame2;  //currently for transposed detection
 
         //host images
         cv::Mat _rgbPdfFrame;
         
         //host images, transposed
+        cv::Mat _transposedDebugFrame;
         cv::Mat _transposedDepthFrame;
             
         //gpu images
@@ -110,6 +112,10 @@ namespace ise
         cv::gpu::GpuMat _transposedDepthFrameGpu;
         cv::gpu::GpuMat _transposedSobelFrameGpu;
         cv::gpu::GpuMat _transposedSobelFrameBufferGpu;
+        cv::gpu::GpuMat _transposedDebugFrameGpu; 
+        cv::gpu::GpuMat _transposedDebugSobelEqFrameGpu;
+        cv::gpu::GpuMat _transposedDebugSobelEqHistGpu;
+        cv::gpu::GpuMat _transposedDebugSobelEqBufferGpu;
 
         //gpu streams
         cv::gpu::Stream _gpuStreamDepthDebug;
@@ -158,7 +164,7 @@ namespace ise
         inline double getSquaredDistanceInRealWorld(int x1, int y1, int depth1, int x2, int y2, int depth2);
 
     public:
-        Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, const cv::Mat& depthFrame, const cv::Mat& depthToColorCoordFrame, cv::Mat& debugFrame);
+        Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, const cv::Mat& depthFrame, const cv::Mat& depthToColorCoordFrame, cv::Mat& debugFrame, cv::Mat& debugFrame2);
 
         void updateDynamicParameters(const DynamicParameters& parameters);
 

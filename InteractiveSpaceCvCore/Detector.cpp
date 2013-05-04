@@ -16,7 +16,7 @@ using namespace std;
 using namespace cv;
 using namespace ise;
 
-Detector::Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, const cv::Mat& depthFrame, const cv::Mat& depthToColorCoordFrame, cv::Mat& debugFrame) :
+Detector::Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, const cv::Mat& depthFrame, const cv::Mat& depthToColorCoordFrame, cv::Mat& debugFrame, cv::Mat& debugFrame2) :
     //initialization list
     //settings
     _settings(settings), 
@@ -26,15 +26,17 @@ Detector::Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, cons
     _depthFrame(depthFrame), 
     _depthToColorCoordFrame(depthToColorCoordFrame), 
     _debugFrame(debugFrame),
+    _debugFrame2(debugFrame2),
 
     //host images
     _rgbPdfFrame(settings.rgbHeight, settings.rgbWidth, CV_32F),
 
     //host images, transposed
-    //TODO
+    _transposedDepthFrame(settings.depthWidth, settings.depthHeight, CV_16U),
+    _transposedDebugFrame(settings.depthWidth, settings.depthHeight, CV_8UC3),
 
     //gpu images
-    _rgbFrameGpu(settings.rgbHeight, settings.rgbWidth, CV_8UC3),
+    _rgbFrameGpu(settings.rgbHeight, settings.rgbWidth, CV_8UC3),                               
     _rgbLabFrameGpu(settings.rgbHeight, settings.rgbWidth, CV_32FC3),
     _rgbPdfFrameGpu(settings.rgbHeight, settings.rgbWidth, CV_32F),
     _depthFrameGpu(settings.depthHeight, settings.depthWidth, CV_16U),
@@ -43,10 +45,16 @@ Detector::Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, cons
     _debugFrameGpu(settings.depthHeight, settings.depthWidth, CV_8UC3),
     _debugSobelEqFrameGpu(settings.depthHeight, settings.depthWidth, CV_8U),
     _debugSobelEqHistGpu(1, 256, CV_32SC1),
-    _debugSobelEqBufferGpu(settings.depthHeight, settings.depthWidth, CV_8U)
+    _debugSobelEqBufferGpu(settings.depthHeight, settings.depthWidth, CV_8U),
 
     //gpu images, transposed
-    //TODO
+    _transposedDepthFrameGpu(settings.depthWidth, settings.depthHeight, CV_16U),
+    _transposedSobelFrameGpu(settings.depthWidth, settings.depthHeight, CV_32F),
+    _transposedSobelFrameBufferGpu(settings.depthWidth, settings.depthHeight, CV_32F),
+    _transposedDebugFrameGpu(settings.depthWidth, settings.depthHeight, CV_8UC3),
+    _transposedDebugSobelEqFrameGpu(settings.depthWidth, settings.depthHeight, CV_8U),
+    _transposedDebugSobelEqHistGpu(1, 256, CV_32SC1),
+    _transposedDebugSobelEqBufferGpu(settings.depthWidth, settings.depthHeight, CV_8U)
 {
 	
     //page lock

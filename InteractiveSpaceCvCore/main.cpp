@@ -20,7 +20,7 @@ using namespace cv;
 using namespace ise;
 
 static CommonSettings _settings;
-static cv::Mat _rgbFrame, _depthFrame, _debugFrame, _depthToRgbCoordFrame;
+static cv::Mat _rgbFrame, _depthFrame, _debugFrame, _debugFrame2, _depthToRgbCoordFrame;
 static KinectSimulator* _kinectSimulator;
 static Detector* _detector;
 
@@ -43,8 +43,14 @@ void glutDisplay()
 
 	//opengl draw
 	glClear(GL_COLOR_BUFFER_BIT);
+
+    glRasterPos2i(-1, 1);
 	glDrawPixels(_settings.depthWidth, _settings.depthHeight, GL_RGB, GL_UNSIGNED_BYTE, _debugFrame.data);
+    
+    glRasterPos2i(0, 1);
+    glDrawPixels(_settings.depthWidth, _settings.depthHeight, GL_RGB, GL_UNSIGNED_BYTE, _debugFrame2.data);
     //glDrawPixels(_settings.depthWidth, _settings.depthHeight, GL_LUMINANCE, GL_FLOAT, _detector->getPdfFrame().data);
+
 	glutSwapBuffers();
 
     /*
@@ -67,13 +73,13 @@ void glutDisplay()
 		printf("FPS = %6.2f\r", fps);
 	}
 
-    Sleep(100);
+    //Sleep(100);
 }
 
 int main(int argc, char** argv)
 {
-    const char pathPrefix[] = "C:\\Users\\cuda\\kinect\\record\\rec130421-2139";      //test color
-	//const char pathPrefix[] = "C:\\Users\\cuda\\kinect\\record\\rec130412-2036";    //normal
+    //const char pathPrefix[] = "C:\\Users\\cuda\\kinect\\record\\rec130421-2139";      //test color
+	const char pathPrefix[] = "C:\\Users\\cuda\\kinect\\record\\rec130412-2036";    //normal
     //const char pathPrefix[] = "C:\\Users\\cuda\\kinect\\record\\rec130417-1429";    //crazy
 
 	//load settings
@@ -85,6 +91,7 @@ int main(int argc, char** argv)
 	_rgbFrame.create(_settings.rgbHeight, _settings.rgbWidth, CV_8UC3);
 	_depthFrame.create(_settings.depthHeight, _settings.depthWidth, CV_16U);
 	_debugFrame.create(_settings.depthHeight, _settings.depthWidth, CV_8UC3);
+    _debugFrame2.create(_settings.depthHeight, _settings.depthWidth, CV_8UC3);
 
     //init coord frame
     _depthToRgbCoordFrame.create(_settings.depthHeight, _settings.depthWidth, CV_32SC2);
@@ -94,6 +101,7 @@ int main(int argc, char** argv)
         gpu::registerPageLocked(_rgbFrame);
         gpu::registerPageLocked(_depthFrame);
         gpu::registerPageLocked(_debugFrame);
+        gpu::registerPageLocked(_debugFrame2);
     }
     catch (cv::Exception e)
     {
@@ -102,20 +110,19 @@ int main(int argc, char** argv)
 
 	//init simulator and detector
     _kinectSimulator = new KinectSimulator(_settings, pathPrefix, _rgbFrame, _depthFrame, _depthToRgbCoordFrame);
-    _detector = new Detector(_settings, _rgbFrame, _depthFrame, _depthToRgbCoordFrame, _debugFrame);
+    _detector = new Detector(_settings, _rgbFrame, _depthFrame, _depthToRgbCoordFrame, _debugFrame, _debugFrame2);
     _detector->updateDynamicParameters(dynamicParams);
 
 	//init glut
 	glutInit(&argc, argv);
 	glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB);
-	glutInitWindowSize(_settings.depthWidth, _settings.depthHeight);
-	glutInitWindowPosition(500, 500);
+	glutInitWindowSize(_settings.depthWidth * 2, _settings.depthHeight);
+	glutInitWindowPosition(250, 500);
 	glutCreateWindow("Window");
 	glutSetOption(GLUT_ACTION_ON_WINDOW_CLOSE, GLUT_ACTION_CONTINUE_EXECUTION);
 
 	//set opengl parameters
 	glClearColor (0.0, 0.0, 0.0, 0.0);
-	glRasterPos2i(-1, 1);
 	glPixelZoom(1.0f, -1.0f);
 
 	glutDisplayFunc(glutDisplay);
@@ -132,10 +139,12 @@ int main(int argc, char** argv)
     gpu::unregisterPageLocked(_depthFrame);
     gpu::unregisterPageLocked(_rgbFrame);
     gpu::unregisterPageLocked(_debugFrame);
+    gpu::unregisterPageLocked(_debugFrame2);
 
 	_rgbFrame.release();
 	_depthFrame.release();
 	_debugFrame.release();
+    _debugFrame2.release();
     _depthToRgbCoordFrame.release();
     
     //system("PAUSE");
