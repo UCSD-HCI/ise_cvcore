@@ -67,6 +67,7 @@ Detector::Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, cons
 
 	//allocate memory for flood test visited flag
 	_floodHitTestVisitedFlag = new uchar[_settings.depthWidth * _settings.depthHeight];
+    _transposedFloodHitTestVisitedFlag = new uchar[_settings.depthHeight * _settings.depthWidth];
     
 	//init vectors
 	_fingers.reserve(ISE_MAX_FINGER_NUM);
@@ -97,6 +98,7 @@ FingerDetectionResults Detector::detect()
     findFingers<DirDefault>();
     findFingers<DirTransposed>();
     floodHitTest<DirDefault>();
+    floodHitTest<DirTransposed>();
     
     transpose(_transposedDebugFrame, _debugFrame2);
 
@@ -235,6 +237,7 @@ void Detector::findFingers()
             _OmniTouchStripDev* last = _stripBuffer[_stripBuffer.size() - 1];
             
             OmniTouchFinger finger;
+            finger.direction = (dir == DirTransposed ? FingerDirHorizontal : FingerDirVertical);
 
             //int firstMidCol = (first->start + first->end) / 2;
             finger.tipX = (first->start + first->end) / 2;
@@ -330,6 +333,30 @@ void Detector::findFingers()
 template <_ImageDirection dir> 
 void Detector::floodHitTest()
 {
+    uchar* floodHitTestVisitedFlag;
+    std::vector<_OmniTouchFinger>* fingers;
+    int width, height;
+    Mat debugFrame, depthFrame;
+
+    if (dir == DirTransposed)
+    {
+        fingers = &_transposedFingers;
+        width = _settings.depthHeight;
+        height = _settings.depthWidth;
+        debugFrame = _transposedDebugFrame;
+        depthFrame = _transposedDepthFrame;
+        floodHitTestVisitedFlag = _transposedFloodHitTestVisitedFlag;
+    }
+    else
+    {
+        fingers = &_fingers;
+        width = _settings.depthWidth;
+        height = _settings.depthHeight;
+        debugFrame = _debugFrame;
+        depthFrame = _depthFrame;
+        floodHitTestVisitedFlag = _floodHitTestVisitedFlag;
+    }
+
 
 	static const int neighborOffset[3][2] =
 	{
@@ -338,13 +365,13 @@ void Detector::floodHitTest()
 		{0, -1}
 	};
 
-	for (vector<OmniTouchFinger>::iterator it = _fingers.begin(); it != _fingers.end(); ++it)
+	for (vector<OmniTouchFinger>::iterator it = fingers->begin(); it != fingers->end(); ++it)
 	{
 		deque<_IntPoint3D> dfsQueue;
 		int area = 0;
-		memset(_floodHitTestVisitedFlag, 0, _settings.depthWidth * _settings.depthHeight);
+		memset(floodHitTestVisitedFlag, 0, width * height);
 
-		ushort tipDepth = *ushortValAt(_depthFrame, it->tipY, it->tipX);
+		ushort tipDepth = *ushortValAt(depthFrame, it->tipY, it->tipX);
 		_IntPoint3D p;
 		p.x = it->tipX;
 		p.y = it->tipY;
@@ -361,13 +388,13 @@ void Detector::floodHitTest()
 				int row = centerPoint.y + neighborOffset[i][1];
 				int col = centerPoint.x + neighborOffset[i][0];
 
-				if (row < 0 || row >= _settings.depthHeight || col < 0 || col >= _settings.depthWidth
-					|| _floodHitTestVisitedFlag[row * _settings.depthWidth + col] > 0)
+				if (row < 0 || row >= height || col < 0 || col >= width
+					|| floodHitTestVisitedFlag[row * width + col] > 0)
 				{
 					continue;
 				}
 
-				ushort neiborDepth = *ushortValAt(_depthFrame, row, col);
+				ushort neiborDepth = *ushortValAt(depthFrame, row, col);
 				if (abs(neiborDepth - centerPoint.z) > _parameters.omniTouchParam.clickFloodMaxGrad)
 				{
 					continue;					
@@ -378,9 +405,9 @@ void Detector::floodHitTest()
 				p.z = neiborDepth;
 				dfsQueue.push_back(p);
 				area++;
-				_floodHitTestVisitedFlag[row * _settings.depthWidth + col] = 255;
+				floodHitTestVisitedFlag[row * width + col] = 255;
 
-				uchar* dstPixel = rgb888ValAt(_debugFrame, row, col);
+				uchar* dstPixel = rgb888ValAt(debugFrame, row, col);
 				dstPixel[0] = 255;
 				dstPixel[1] = 255;
 				dstPixel[2] = 0;
@@ -394,7 +421,7 @@ void Detector::floodHitTest()
 		}
 
 
-        circle(_debugFrame, Point(it->tipX, it->tipY), 5, Scalar(0, 148, 42), -1);
+        circle(debugFrame, Point(it->tipX, it->tipY), 5, Scalar(0, 148, 42), -1);
 	}
 
 }
