@@ -16,6 +16,8 @@ using namespace std;
 using namespace cv;
 using namespace ise;
 
+const double Detector::MIN_FINGER_COLOR_PDF = 1e-4;
+
 Detector::Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, const cv::Mat& depthFrame, const cv::Mat& depthToColorCoordFrame, cv::Mat& debugFrame, cv::Mat& debugFrame2) :
     //initialization list
     //settings
@@ -261,6 +263,9 @@ void Detector::findFingers()
                 float colorPdfScore = 0;
                 int pixelCount = 0;
 
+                vector<int> widthList;  //TODO: speed optimize? 
+                vector<Point> centerPoints;
+
 				for (int rowFill = first->row; rowFill <= last->row; rowFill++)
 				{
 					int leftCol, rightCol;
@@ -285,8 +290,8 @@ void Detector::findFingers()
 					{
                         uchar* dstPixel = debugFrame.ptr(rowFill) + colFill * 3;
                         
-						//dstPixel[0] = 255;
-						//dstPixel[2] = 255;
+						dstPixel[0] = 255;
+						dstPixel[2] = 255;
 
                         //read color
                         int dx = (dir == DirTransposed ? rowFill : colFill);
@@ -296,25 +301,50 @@ void Detector::findFingers()
                         int cx = mapCoord[0];
                         int cy = mapCoord[1];
                         const float* pdfPixel = (float*)_rgbPdfFrame.ptr(cy) + cx;
-
+                        
+                        /* //draw pdf values
                         dstPixel[0] = (uchar)(*pdfPixel * 1000.0f * 255.0f + 0.5f);
                         dstPixel[1] = dstPixel[0];
                         dstPixel[2] = dstPixel[0];
+                        */
 
                         colorPdfScore += *pdfPixel;
                         pixelCount++;
 
-                        const uchar* rgbPixel = _rgbFrame.ptr(cy) + cx * 3;
-                        memcpy(dstPixel, rgbPixel, 3);
+                        //draw rgb values
+                        /*const uchar* rgbPixel = _rgbFrame.ptr(cy) + cx * 3;
+                        memcpy(dstPixel, rgbPixel, 3);*/
 					}
+
+                    centerPoints.push_back(Point((rightCol + leftCol) / 2, rowFill)); 
+                    widthList.push_back(rightCol - leftCol + 1);
 				}
 
                 colorPdfScore /= pixelCount;
 
                 //printf("%f ", colorPdfScore);
-                if (colorPdfScore >= 1e-4)  //TODO: avoid hard coding
+                if (colorPdfScore >= MIN_FINGER_COLOR_PDF)  //TODO: avoid hard coding
                 {
-                    fingers->push_back(finger);
+                    //use median as the width of the finger
+                    size_t mid = widthList.size() / 2;
+                    nth_element(widthList.begin(), widthList.begin() + mid, widthList.end());
+                    finger.width = widthList[mid];
+
+                    //line-fitting to find the angle; TODO: use RANSAC
+                    Vec4f line;
+                    fitLine(centerPoints, line, CV_DIST_HUBER, 0, 0.01, 0.01); //TODO: test performance
+                    finger.cosTheta = line[0] / line[1];
+
+                    //filter by angle
+                    if (abs(finger.cosTheta) <= 0.8660f)   // -60 ~ +60 //TODO: avoid hard code
+                    {
+                        //adjust tipX and endX
+                        finger.tipX = line[2] + (finger.tipY - line[3]) * line[0] / line[1];
+                        finger.endX = line[2] + (finger.endY - line[3]) * line[0] / line[1];
+
+                        fingers->push_back(finger);
+                        drawFingerBoundingBox(finger);
+                    }
                 }     
                 else
                 {
@@ -426,3 +456,30 @@ void Detector::floodHitTest()
 
 }
 
+void Detector::drawFingerBoundingBox(const _OmniTouchFinger& finger)
+{
+    //float dist = sqrt(powf(finger.tipX - finger.endX, 2) + powf(finger.tipY - finger.endY, 2));
+    //float sinA = (finger.endY - finger.tipY) / dist;
+    //float cosA = (finger.endX - finger.tipX) / dist;
+    float cosTheta = finger.cosTheta;
+    float sinTheta = sqrt(1 - powf(finger.cosTheta, 2));
+
+    float recWidth = finger.width * sinTheta;
+    int dx = (int)(recWidth * sinTheta / 2.f + 0.5f);
+    int dy = (int)(recWidth * cosTheta / 2.f + 0.5f);
+
+    //float adjEndX = finger.tipX + (finger.endY - finger.tipY) * cosTheta / sinTheta;
+
+    Point p[4] =
+    {
+        Point(finger.tipX - dx, finger.tipY + dy),
+        Point(finger.tipX + dx, finger.tipY - dy),
+        Point(finger.endX + dx, finger.endY - dy),
+        Point(finger.endX - dx, finger.endY + dy)
+    };
+    const Point* pArr[1] = {p};
+    int nptsArr[1] = {4};
+    
+    Mat& debugFrame = (finger.direction == FingerDirHorizontal ? _transposedDebugFrame : _debugFrame);
+    cv::polylines(debugFrame, pArr, nptsArr, 1, true, Scalar(255, 128, 0), 3, 8, 0);
+}

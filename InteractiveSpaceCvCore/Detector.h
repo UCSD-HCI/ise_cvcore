@@ -34,6 +34,8 @@ namespace ise
     {
 	    int tipX, tipY, tipZ;
 	    int endX, endY, endZ;
+        float width;
+        float cosTheta;
         FingerDirection direction;
         bool isOnSurface;
 
@@ -70,6 +72,7 @@ namespace ise
         static const int MAX_STRIPS_PER_ROW = 128;
         static const int MAX_FINGER_PIXEL_LENGTH = 128; //in pixels. TODO: compute this from max finger length (in real) 
         static const int FLOOD_FILL_RADIUS = 128;
+        static const double MIN_FINGER_COLOR_PDF;
 
     private:
         //settings
@@ -181,6 +184,8 @@ namespace ise
         
         inline void convertProjectiveToRealWorld(int x, int y, int depth, double& rx, double& ry, double& rz);
         inline double getSquaredDistanceInRealWorld(int x1, int y1, int depth1, int x2, int y2, int depth2);
+        
+        void drawFingerBoundingBox(const _OmniTouchFinger& finger);
 
     public:
         Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, const cv::Mat& depthFrame, const cv::Mat& depthToColorCoordFrame, cv::Mat& debugFrame, cv::Mat& debugFrame2);
