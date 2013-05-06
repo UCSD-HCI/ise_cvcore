@@ -23,12 +23,21 @@ static CommonSettings _settings;
 static cv::Mat _rgbFrame, _depthFrame, _debugFrame, _debugFrame2, _depthToRgbCoordFrame;
 static KinectSimulator* _kinectSimulator;
 static Detector* _detector;
+static bool _steppingMode;
+static bool _steppingPause;
 
 void glutDisplay()
 {
 	static int fpsFrameCount = 0;
 	static int fpsStartTime = 0;
 	static int fpsCurrTime = 0;
+
+    if (_steppingMode && _steppingPause)
+    {
+        return;
+    }
+
+    _steppingPause = true;
 
     if (_kinectSimulator->capture() == KinectSimulator::ERROR_KINECT_EOF)
 	{
@@ -61,19 +70,44 @@ void glutDisplay()
         of.close();
     }*/
 
-	//compute fps
-	fpsCurrTime = glutGet(GLUT_ELAPSED_TIME);
-	fpsFrameCount++;
-	if (fpsCurrTime - fpsStartTime > 500)
-	{
-		double fps = fpsFrameCount * 1000.0 / (fpsCurrTime - fpsStartTime);
-		fpsStartTime = fpsCurrTime;
-		fpsFrameCount = 0;
+    if (_steppingMode)
+    {
+        printf("Frame: %d\n", _kinectSimulator->getCurrentFrame());
+    }
+    else
+    {
+	    //compute fps
+	    fpsCurrTime = glutGet(GLUT_ELAPSED_TIME);
+	    fpsFrameCount++;
+	    if (fpsCurrTime - fpsStartTime > 500)
+	    {
+		    double fps = fpsFrameCount * 1000.0 / (fpsCurrTime - fpsStartTime);
+		    fpsStartTime = fpsCurrTime;
+		    fpsFrameCount = 0;
 
-		printf("FPS = %6.2f\r", fps);
-	}
+		    printf("FPS = %6.2f\r", fps);
+	    }
+    }
 
-    Sleep(100);
+    //Sleep(100);
+}
+
+void glutKeyboard(uchar key, int x, int y)
+{
+    switch (key)
+    {
+    case 'p':   //play / pause
+        _steppingMode = !_steppingMode;
+        break;
+
+    case 'n':
+        _steppingPause = false;
+        break;
+
+    case 27:
+        glutLeaveMainLoop();
+        break;
+    }
 }
 
 int main(int argc, char** argv)
@@ -115,6 +149,8 @@ int main(int argc, char** argv)
     _detector->updateDynamicParameters(dynamicParams);
 
 	//init glut
+    _steppingMode = true;
+    _steppingPause = false;
 	glutInit(&argc, argv);
 	glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB);
 	glutInitWindowSize(_settings.depthWidth * 2, _settings.depthHeight);
@@ -128,6 +164,7 @@ int main(int argc, char** argv)
 
 	glutDisplayFunc(glutDisplay);
 	glutIdleFunc(glutDisplay);
+    glutKeyboardFunc(glutKeyboard);
 	glutMainLoop();	
 
 	//release resources
