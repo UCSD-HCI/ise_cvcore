@@ -73,7 +73,7 @@ void glutDisplay()
 		printf("FPS = %6.2f\r", fps);
 	}
 
-    //Sleep(100);
+    Sleep(100);
 }
 
 int main(int argc, char** argv)

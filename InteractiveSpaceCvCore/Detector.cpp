@@ -477,9 +477,31 @@ void Detector::drawFingerBoundingBox(const _OmniTouchFinger& finger)
         Point(finger.endX + dx, finger.endY - dy),
         Point(finger.endX - dx, finger.endY + dy)
     };
+    Point pTr[4] = 
+    {
+        Point(finger.tipY + dy, finger.tipX - dx),
+        Point(finger.tipY - dy, finger.tipX + dx),
+        Point(finger.endY - dy, finger.endX + dx),
+        Point(finger.endY + dy, finger.endX - dx)
+    };
     const Point* pArr[1] = {p};
+    const Point* pTrArr[1] = {pTr};
     int nptsArr[1] = {4};
     
-    Mat& debugFrame = (finger.direction == FingerDirHorizontal ? _transposedDebugFrame : _debugFrame);
-    cv::polylines(debugFrame, pArr, nptsArr, 1, true, Scalar(255, 128, 0), 3, 8, 0);
+    if (finger.direction == FingerDirHorizontal)
+    {
+        //draw on transposed
+        cv::polylines(_transposedDebugFrame, pArr, nptsArr, 1, true, Scalar(8, 111, 161), 3);
+
+        //draw on origin
+        cv::polylines(_debugFrame, pTrArr, nptsArr, 1, true, Scalar(8, 111, 161), 3);
+    }
+    else
+    {
+        //draw on origin
+        cv::polylines(_debugFrame, pArr, nptsArr, 1, true, Scalar(255, 137, 0), 3);
+
+        //draw on transposed
+        cv::polylines(_transposedDebugFrame, pTrArr, nptsArr, 1, true, Scalar(255, 137, 0), 3);
+    }
 }
