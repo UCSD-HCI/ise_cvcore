@@ -19,12 +19,6 @@ using namespace std;
 using namespace cv;
 using namespace ise;
 
-typedef enum __ImageDirection
-{
-    DirDefault,
-    DirTransposed
-} _ImageDirection;
-
 //declare textures
 texture<ushort, 2> texDepth;
 texture<float, 2> texSobel;

@@ -63,12 +63,14 @@ Detector::Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, cons
 
      //init memory for storing fingers
     _stripVisitedFlags = new uchar[(MAX_STRIPS_PER_ROW + 1) * settings.depthHeight];
+    _transposedStripVisitedFlags = new uchar[(MAX_STRIPS_PER_ROW + 1) * settings.depthWidth];
 
 	//allocate memory for flood test visited flag
 	_floodHitTestVisitedFlag = new uchar[_settings.depthWidth * _settings.depthHeight];
     
 	//init vectors
 	_fingers.reserve(ISE_MAX_FINGER_NUM);
+    _transposedFingers.reserve(ISE_MAX_FINGER_NUM);
 
     cudaInit();
 }
@@ -92,8 +94,9 @@ FingerDetectionResults Detector::detect()
 
     gpuProcess();
 
-    findFingers();
-    floodHitTest();
+    findFingers<DirDefault>();
+    findFingers<DirTransposed>();
+    floodHitTest<DirDefault>();
     
     transpose(_transposedDebugFrame, _debugFrame2);
 
@@ -132,55 +135,84 @@ double Detector::getSquaredDistanceInRealWorld(int x1, int y1, int depth1, int x
 	return ((rx1 - rx2) * (rx1 - rx2) + (ry1 - ry2) * (ry1 - ry2) + (rz1 - rz2) * (rz1 - rz2));
 }
 
+template <_ImageDirection dir> 
 void Detector::findFingers()
 {
+    std::vector<_OmniTouchFinger>* fingers;
+    int width, height, maxStripRowCount;
+    uchar* stripVisitedFlags;
+    _OmniTouchStripDev* stripsHost;
+    Mat debugFrame, depthFrame;
+
+    if (dir == DirTransposed)
+    {
+        fingers = &_transposedFingers;
+        width = _settings.depthHeight;
+        height = _settings.depthWidth;
+        maxStripRowCount = _transposedMaxStripRowCount;
+        stripVisitedFlags = _transposedStripVisitedFlags;
+        stripsHost = _transposedStripsHost;
+        debugFrame = _transposedDebugFrame;
+        depthFrame = _transposedDepthFrame;
+    }
+    else
+    {
+        fingers = &_fingers;
+        width = _settings.depthWidth;
+        height = _settings.depthHeight;
+        maxStripRowCount = _maxStripRowCount;
+        stripVisitedFlags = _stripVisitedFlags;
+        stripsHost = _stripsHost;
+        debugFrame = _debugFrame;
+        depthFrame = _depthFrame;
+    }
+
     //init visited flags; 
-    memset(_stripVisitedFlags, 0, _settings.depthHeight * _maxStripRowCount);
+    memset(stripVisitedFlags, 0, height * maxStripRowCount);  
 
     //init global finger count
-    _fingers.clear();
+    fingers->clear();
 	
-	for (int row = 0; row < _settings.depthHeight; row++)
+	for (int row = 0; row < height; row++)
 	{
-        for (int col = 0; col < _stripsHost[row].end - 1; col++)
+        for (int col = 0; col < stripsHost[row].end - 1; col++)
         {
-            int stripOffset = (col + 1) * _settings.depthHeight + row;
+            int stripOffset = (col + 1) * height + row;
 
-			if (_stripVisitedFlags[stripOffset] > 0)
+			if (stripVisitedFlags[stripOffset] > 0)
 			{
 				continue;
 			}
 
             _stripBuffer.clear();
-            _stripBuffer.push_back(_stripsHost + stripOffset);
-            _stripVisitedFlags[stripOffset] = 1;
+            _stripBuffer.push_back(stripsHost + stripOffset);
+            stripVisitedFlags[stripOffset] = 1;
 
 			//search down
 			int blankCounter = 0;
-			for (int si = row; si < _settings.depthHeight; si++)   
+			for (int si = row; si < height; si++)   
 			{
                 _OmniTouchStripDev* currTop = _stripBuffer[_stripBuffer.size() - 1];
 
 				//search strip
 				bool stripFound = false;
                 
-                int searchDownOffset = _settings.depthHeight + si;
+                int searchDownOffset = height + si;
 
-                for (int sj = 0; sj < _stripsHost[si].end - 1; ++sj, searchDownOffset += _settings.depthHeight)
+                for (int sj = 0; sj < stripsHost[si].end - 1; ++sj, searchDownOffset += height)
 				{
-					if (_stripVisitedFlags[searchDownOffset])
+					if (stripVisitedFlags[searchDownOffset])
 					{
 						continue;
 					}
 
-                    _OmniTouchStripDev* candidate = _stripsHost + searchDownOffset;
+                    _OmniTouchStripDev* candidate = stripsHost + searchDownOffset;
 
                     if (candidate->end > currTop->start && candidate->start < currTop->end)	//overlap!
 					{
-                        _stripBuffer.push_back(_stripsHost + searchDownOffset);
+                        _stripBuffer.push_back(stripsHost + searchDownOffset);
                         
-                        //Note: race condition happens here. But won't generate incorrect results.
-                        _stripVisitedFlags[searchDownOffset] = 1;
+                        stripVisitedFlags[searchDownOffset] = 1;
 						
                         stripFound = true;
 						break;
@@ -211,7 +243,7 @@ void Detector::findFingers()
             finger.endX = (last->start + last->end) / 2;
             finger.endY = last->row;
 
-            finger.tipZ = *(ushort*)(_depthFrame.ptr((first->row + last->row) / 2) + (finger.tipX + finger.endX) / 2 * sizeof(ushort));
+            finger.tipZ = *(ushort*)(depthFrame.ptr((first->row + last->row) / 2) + (finger.tipX + finger.endX) / 2 * sizeof(ushort));
             finger.endZ = finger.tipZ;
 			
             double lengthSquared = getSquaredDistanceInRealWorld(finger.tipX, finger.tipY, finger.tipZ, finger.endX, finger.endY, finger.endZ);
@@ -248,13 +280,16 @@ void Detector::findFingers()
 
 					for (int colFill = leftCol; colFill <= rightCol; colFill++)
 					{
-                        uchar* dstPixel = _debugFrame.ptr(rowFill) + colFill * 3;
+                        uchar* dstPixel = debugFrame.ptr(rowFill) + colFill * 3;
                         
 						//dstPixel[0] = 255;
 						//dstPixel[2] = 255;
 
                         //read color
-                        const int* mapCoord = (int*)_depthToColorCoordFrame.ptr(rowFill) + colFill * 2;
+                        int dx = (dir == DirTransposed ? rowFill : colFill);
+                        int dy = (dir == DirTransposed ? colFill : rowFill);
+
+                        const int* mapCoord = (int*)_depthToColorCoordFrame.ptr(dy) + dx * 2;
                         int cx = mapCoord[0];
                         int cy = mapCoord[1];
                         const float* pdfPixel = (float*)_rgbPdfFrame.ptr(cy) + cx;
@@ -276,11 +311,11 @@ void Detector::findFingers()
                 //printf("%f ", colorPdfScore);
                 if (colorPdfScore >= 1e-4)  //TODO: avoid hard coding
                 {
-                    _fingers.push_back(finger);
+                    fingers->push_back(finger);
                 }     
                 else
                 {
-                    circle(_debugFrame, Point(finger.tipX, finger.tipY), 5, Scalar(224,80,1), -1);
+                    circle(debugFrame, Point(finger.tipX, finger.tipY), 5, Scalar(224,80,1), -1);
                 }
                 
 			} // check length
@@ -289,10 +324,10 @@ void Detector::findFingers()
 	} //for each row
 
     //printf("\n");
-    sort(_fingers.begin(), _fingers.end());
+    sort(fingers->begin(), fingers->end());
 }
 
-
+template <_ImageDirection dir> 
 void Detector::floodHitTest()
 {
 

@@ -3,9 +3,9 @@ import re
 def sizeof_fmt(num):
     for x in ['bytes','KB','MB','GB']:
         if num < 1024.0:
-            return "%3.1f%s" % (num, x)
+            return "%6.1f %s" % (num, x)
         num /= 1024.0
-    return "%3.1f%s" % (num, 'TB')
+    return "%6.1f %s" % (num, 'TB')
 
 f = open('../InteractiveSpaceCvCore/Detector.cpp', 'r')
 pStart = re.compile('^Detector::Detector\(.+\)\s*:\s*$')

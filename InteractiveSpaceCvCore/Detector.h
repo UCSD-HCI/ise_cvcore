@@ -18,14 +18,28 @@ namespace ise
 	    StripFalling
     } StripState;
 
+    typedef enum __ImageDirection
+    {
+        DirDefault,
+        DirTransposed
+    } _ImageDirection;
+
+    typedef enum _FingerDirection
+    {
+        FingerDirVertical,
+        FingerDirHorizontal,
+    } FingerDirection;
+
     typedef struct _OmniTouchFinger
     {
 	    int tipX, tipY, tipZ;
 	    int endX, endY, endZ;
+        FingerDirection direction;
+        bool isOnSurface;
+
         struct _OmniTouchFinger() { }
-	    struct _OmniTouchFinger(int tipX, int tipY, int tipZ, int endX, int endY, int endZ) : tipX(tipX), tipY(tipY), tipZ(tipZ), endX(endX), endY(endY), endZ(endZ), isOnSurface(false) { }
-	    bool operator<(const _OmniTouchFinger& ref) const { return endY - tipY > ref.endY - ref.tipY; }	//sort more to less
-	    bool isOnSurface;
+        struct _OmniTouchFinger(int tipX, int tipY, int tipZ, int endX, int endY, int endZ) : tipX(tipX), tipY(tipY), tipZ(tipZ), endX(endX), endY(endY), endZ(endZ), isOnSurface(false), direction(FingerDirVertical) { }
+        bool operator<(const _OmniTouchFinger& ref) const { return endY - tipY > ref.endY - ref.tipY; }	//sort more to less
     } OmniTouchFinger;
 
     typedef struct __IntPoint3D
@@ -80,7 +94,9 @@ namespace ise
         uchar* _floodHitTestVisitedFlag;                    //warning: shared, must change for multi-threading
 
         //data for find fingers and flood hit, transposed
+        std::vector<OmniTouchFinger> _transposedFingers;
         uchar* _transposedStripVisitedFlags;
+        uchar* _transposedFloodHitTestVisitedFlag;
 
         //external images
         const cv::Mat& _rgbFrame;
@@ -156,11 +172,12 @@ namespace ise
         void cudaRelease();
 
         void gpuProcess();
-        inline void sobel();
-        void findStrips();
+
+        template <_ImageDirection dir> 
         void findFingers();
+
+        template <_ImageDirection dir> 
         void floodHitTest();
-        void refineDebugImage();
         
         inline void convertProjectiveToRealWorld(int x, int y, int depth, double& rx, double& ry, double& rz);
         inline double getSquaredDistanceInRealWorld(int x1, int y1, int depth1, int x2, int y2, int depth2);
