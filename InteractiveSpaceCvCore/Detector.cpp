@@ -104,7 +104,8 @@ FingerDetectionResults Detector::detect()
     combineFingers();
     //floodHitTest<DirDefault>();
     //floodHitTest<DirTransposed>();
-    
+    floodHitTest();
+
     transpose(_transposedDebugFrame, _debugFrame2);
 
 	FingerDetectionResults r;
@@ -401,7 +402,6 @@ void Detector::findFingers()
     sort(fingers->begin(), fingers->end());
 }
 
-template <_ImageDirection dir> 
 void Detector::floodHitTest()
 {
     uchar* floodHitTestVisitedFlag;
@@ -409,31 +409,17 @@ void Detector::floodHitTest()
     int width, height;
     Mat debugFrame, depthFrame;
 
-    if (dir == DirTransposed)
-    {
-        fingers = &_transposedFingers;
-        width = _settings.depthHeight;
-        height = _settings.depthWidth;
-        debugFrame = _transposedDebugFrame;
-        depthFrame = _transposedDepthFrame;
-        floodHitTestVisitedFlag = _transposedFloodHitTestVisitedFlag;
-    }
-    else
-    {
-        fingers = &_fingers;
-        width = _settings.depthWidth;
-        height = _settings.depthHeight;
-        debugFrame = _debugFrame;
-        depthFrame = _depthFrame;
-        floodHitTestVisitedFlag = _floodHitTestVisitedFlag;
-    }
+    fingers = &_fingers;
+    width = _settings.depthWidth;
+    height = _settings.depthHeight;
+    debugFrame = _debugFrame;
+    depthFrame = _depthFrame;
+    floodHitTestVisitedFlag = _floodHitTestVisitedFlag;
 
-
-	static const int neighborOffset[3][2] =
+	static const int neighborOffset[4][3][2] =
 	{
-		{-1, 0},
-		{1, 0},
-		{0, -1}
+        { {-1, 0}, {1, 0}, {0, -1} },    //up
+        { {0, -1}, {0, 1}, {-1, 0} }     //left
 	};
 
 	for (vector<OmniTouchFinger>::iterator it = fingers->begin(); it != fingers->end(); ++it)
@@ -456,8 +442,8 @@ void Detector::floodHitTest()
 
 			for (int i = 0; i < 3; i++)
 			{
-				int row = centerPoint.y + neighborOffset[i][1];
-				int col = centerPoint.x + neighborOffset[i][0];
+                int row = centerPoint.y + neighborOffset[it->direction][i][1];
+                int col = centerPoint.x + neighborOffset[it->direction][i][0];
 
 				if (row < 0 || row >= height || col < 0 || col >= width
 					|| floodHitTestVisitedFlag[row * width + col] > 0)
@@ -635,7 +621,7 @@ void Detector::combineFingers()
             float r = fingerOverlapPercentage(_fingers[i], _transposedFingers[j], _debugFrame);
             if (r >= MIN_FINGER_DIR_OVERLAP)
             {
-                if (abs(_fingers[i].dx) <= abs(_transposedFingers[i].dx))
+                if (abs(_fingers[i].dx) <= abs(_transposedFingers[j].dx))
                 {
                     //choose i, erase j
                     _transposedFingers.erase(_transposedFingers.begin() + j);
