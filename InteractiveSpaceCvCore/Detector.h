@@ -24,6 +24,12 @@ namespace ise
         DirTransposed
     } _ImageDirection;
 
+    typedef enum __FloodTestDirection
+    {
+        FloodTestNormal,
+        FloodTestInversed
+    } _FloodTestDirection;
+
     typedef enum _FingerDirection
     {
         FingerDirUp,    //default for vertical
@@ -39,10 +45,11 @@ namespace ise
         float width;
         float dx, dy;
         FingerDirection direction;
-        bool isOnSurface;
+        bool isTipOnSurface;
+        bool isEndOnSurface;
 
-        struct _OmniTouchFinger() { }
-        struct _OmniTouchFinger(int tipX, int tipY, int tipZ, int endX, int endY, int endZ) : tipX(tipX), tipY(tipY), tipZ(tipZ), endX(endX), endY(endY), endZ(endZ), isOnSurface(false), direction(FingerDirUp) { }
+        struct _OmniTouchFinger() : isTipOnSurface(false), isEndOnSurface(false), direction(FingerDirUp) { }
+        struct _OmniTouchFinger(int tipX, int tipY, int tipZ, int endX, int endY, int endZ) : tipX(tipX), tipY(tipY), tipZ(tipZ), endX(endX), endY(endY), endZ(endZ), isTipOnSurface(false), isEndOnSurface(false), direction(FingerDirUp) { }
         bool operator<(const _OmniTouchFinger& ref) const { return endY - tipY > ref.endY - ref.tipY; }	//sort more to less     
     } OmniTouchFinger;
 
@@ -183,9 +190,11 @@ namespace ise
         template <_ImageDirection dir> 
         void findFingers();
 
+        template <_FloodTestDirection dir>
         void floodHitTest();
         
         void combineFingers();
+        void decideFingerDirections();
 
         //these inlines only used in Detector.cpp
         inline void convertProjectiveToRealWorld(int x, int y, int depth, double& rx, double& ry, double& rz);
@@ -193,7 +202,8 @@ namespace ise
         static inline float getSegOverlapPercentage(float min1, float max1, float min2, float max2);
         static inline float pointToLineDistance(float x0, float y0, float dx, float dy, float x, float y);
         static float fingerOverlapPercentage(const _OmniTouchFinger& f1, const _OmniTouchFinger& f2, cv::Mat& debugFrame);
-        
+        static inline void amendFingerDirection(_OmniTouchFinger& f, bool flip);  
+
         template <_ImageDirection dir>
         void drawFingerBoundingBox(const _OmniTouchFinger& finger);
 

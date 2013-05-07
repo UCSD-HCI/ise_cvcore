@@ -104,7 +104,9 @@ FingerDetectionResults Detector::detect()
     combineFingers();
     //floodHitTest<DirDefault>();
     //floodHitTest<DirTransposed>();
-    floodHitTest();
+    floodHitTest<FloodTestNormal>();
+    floodHitTest<FloodTestInversed>();
+    decideFingerDirections();
 
     transpose(_transposedDebugFrame, _debugFrame2);
 
@@ -120,7 +122,7 @@ FingerDetectionResults Detector::detect()
 		r.fingers[i].endX = _fingers[i].endX;
 		r.fingers[i].endY = _fingers[i].endY;
 		r.fingers[i].endZ = _fingers[i].endZ;
-		r.fingers[i].isOnSurface = _fingers[i].isOnSurface ? 1 : 0;
+		r.fingers[i].isOnSurface = _fingers[i].isTipOnSurface ? 1 : 0;
 	}
 
 	return r;
@@ -282,7 +284,8 @@ void Detector::findFingers()
                 int pixelCount = 0;
 
                 vector<int> widthList;  //TODO: speed optimize? 
-                vector<Point> centerPoints;
+                vector<Point2i> centerPoints;
+                vector<Point2i> depthList;
 
 				for (int rowFill = first->row; rowFill <= last->row; rowFill++)
 				{
@@ -308,8 +311,8 @@ void Detector::findFingers()
 					{
                         uchar* dstPixel = debugFrame.ptr(rowFill) + colFill * 3;
                         
-						dstPixel[0] = 255;
-						dstPixel[2] = 255;
+						//dstPixel[0] = 255;
+						//dstPixel[2] = 255;
 
                         //read color
                         int dx = (dir == DirTransposed ? rowFill : colFill);
@@ -330,13 +333,16 @@ void Detector::findFingers()
                         pixelCount++;
 
                         //draw rgb values
-                        /*
+                        
                         const uchar* rgbPixel = _rgbFrame.ptr(cy) + cx * 3;
                         memcpy(dstPixel, rgbPixel, 3);
-                        */
+                        
 					}
 
-                    centerPoints.push_back(Point((rightCol + leftCol) / 2, rowFill)); 
+                    int centerCol = (rightCol + leftCol) / 2;
+                    ushort centerDepth = *((ushort*)depthFrame.ptr(rowFill) + centerCol);
+                    depthList.push_back(Point2i(rowFill, centerDepth));
+                    centerPoints.push_back(Point2i(centerCol, rowFill)); 
                     widthList.push_back(rightCol - leftCol + 1);
 				}
 
@@ -371,6 +377,12 @@ void Detector::findFingers()
                         //adjust tipX and endX
                         finger.tipX = line[2] + (finger.tipY - line[3]) * finger.dx / finger.dy;
                         finger.endX = line[2] + (finger.endY - line[3]) * finger.dx / finger.dy;
+                        
+                        //adjust depth
+                        Vec4f depthLine;
+                        fitLine(depthList, depthLine, CV_DIST_HUBER, 0, 0.01, 0.01);
+                        finger.tipZ = depthLine[3] + (finger.tipY - depthLine[2]) * depthLine[1] / depthLine[0];
+                        finger.endZ = depthLine[3] + (finger.endY - depthLine[2]) * depthLine[1] / depthLine[0];
 
                         if (dir == DirTransposed)
                         {
@@ -402,6 +414,7 @@ void Detector::findFingers()
     sort(fingers->begin(), fingers->end());
 }
 
+template <_FloodTestDirection dir>
 void Detector::floodHitTest()
 {
     uchar* floodHitTestVisitedFlag;
@@ -419,7 +432,9 @@ void Detector::floodHitTest()
 	static const int neighborOffset[4][3][2] =
 	{
         { {-1, 0}, {1, 0}, {0, -1} },    //up
-        { {0, -1}, {0, 1}, {-1, 0} }     //left
+        { {0, -1}, {0, 1}, {-1, 0} },    //left
+        { {-1, 0}, {1, 0}, {0, 1} },     //down
+        { {0, -1}, {0, 1}, {1, 0} }      //right
 	};
 
 	for (vector<OmniTouchFinger>::iterator it = fingers->begin(); it != fingers->end(); ++it)
@@ -428,11 +443,20 @@ void Detector::floodHitTest()
 		int area = 0;
 		memset(floodHitTestVisitedFlag, 0, width * height);
 
-		ushort tipDepth = *ushortValAt(depthFrame, it->tipY, it->tipX);
 		_IntPoint3D p;
-		p.x = it->tipX;
-		p.y = it->tipY;
-		p.z = it->tipZ;
+
+        if (dir == FloodTestInversed)
+        {
+            p.x = it->endX;
+		    p.y = it->endY;
+		    p.z = it->endZ;
+        }
+        else
+        {
+		    p.x = it->tipX;
+		    p.y = it->tipY;
+		    p.z = it->tipZ;
+        }
 		dfsQueue.push_back(p);
 
 		while(!dfsQueue.empty())
@@ -442,8 +466,19 @@ void Detector::floodHitTest()
 
 			for (int i = 0; i < 3; i++)
 			{
-                int row = centerPoint.y + neighborOffset[it->direction][i][1];
-                int col = centerPoint.x + neighborOffset[it->direction][i][0];
+                FingerDirection testDir;
+                
+                if (dir == FloodTestInversed)
+                {
+                    testDir = (it->direction == FingerDirUp ? FingerDirDown : FingerDirRight);
+                }
+                else
+                {
+                    testDir = it->direction;
+                }
+
+                int row = centerPoint.y + neighborOffset[testDir][i][1];
+                int col = centerPoint.x + neighborOffset[testDir][i][0];
 
 				if (row < 0 || row >= height || col < 0 || col >= width
 					|| floodHitTestVisitedFlag[row * width + col] > 0)
@@ -472,13 +507,21 @@ void Detector::floodHitTest()
 
 			if (area >= _parameters.omniTouchParam.clickFloodArea)
 			{
-				it->isOnSurface = true;
+                if (dir == FloodTestNormal)
+                {
+                    it->isTipOnSurface = true;
+                }
+                else
+                {
+                    it->isEndOnSurface = true;
+                }
+
 				break;
 			}
 		}
 
 
-        circle(debugFrame, Point(it->tipX, it->tipY), 5, Scalar(0, 148, 42), -1);
+        //circle(debugFrame, Point(it->tipX, it->tipY), 5, Scalar(0, 148, 42), -1);
 	}
 
 }
@@ -639,3 +682,57 @@ void Detector::combineFingers()
     _fingers.insert(_fingers.end(), _transposedFingers.begin(), _transposedFingers.end());
 }
 
+//make (dx, dy) points to the direction from finger end to tip.
+void Detector::amendFingerDirection(_OmniTouchFinger& f, bool flip)
+{
+    if (flip)
+    {
+        f.direction = (f.direction == FingerDirLeft ? FingerDirRight : FingerDirDown);
+        swap(f.tipX, f.endX);
+        swap(f.tipY, f.endY);
+        swap(f.tipZ, f.endZ);
+        swap(f.isTipOnSurface, f.isEndOnSurface);
+    }
+
+    if (!flip)
+    {
+        //in findFingers we made dy >= 0, which is from tip to end
+        f.dx = -f.dx;   
+        f.dy = -f.dy; 
+    }
+}
+
+bool isDanglingFinger(const _OmniTouchFinger& f)
+{
+    return (!f.isTipOnSurface && !f.isEndOnSurface);
+}
+
+void Detector::decideFingerDirections()
+{
+    //remove cases that neigher tip nor end is on surface, which is very possibly false positive
+   _fingers.erase(remove_if(_fingers.begin(), _fingers.end(), isDanglingFinger), _fingers.end());
+
+    for (int i = 0; i < _fingers.size(); i++)
+    {
+        OmniTouchFinger& f = _fingers[i];
+
+        if (f.isTipOnSurface && f.isEndOnSurface)
+        {
+            //on surface
+            //TODO important: should compare on tabletop coordinate
+            amendFingerDirection(f, f.direction == FingerDirLeft && f.tipZ < f.endZ);   
+        }
+        else if (!f.isTipOnSurface && !f.isEndOnSurface)
+        {
+            //theoretically not possible. happens in real case. regard it as non-finger so as to reduce false positive
+            assert(0);  //should be removed above
+        }
+        else
+        {
+            amendFingerDirection(f, f.isTipOnSurface);
+        }
+        
+        circle(_debugFrame, Point(f.tipX, f.tipY), 5, Scalar(0, 148, 42), -1);
+        line(_debugFrame, Point(f.tipX, f.tipY), Point(f.tipX + f.dx * 20, f.tipY + f.dy * 20), Scalar(0, 148, 42));
+    }
+}
