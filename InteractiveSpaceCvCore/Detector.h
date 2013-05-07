@@ -26,8 +26,10 @@ namespace ise
 
     typedef enum _FingerDirection
     {
-        FingerDirVertical,
-        FingerDirHorizontal,
+        FingerDirUp,    //default for vertical
+        FingerDirLeft,  //default for horizontal (tranposed)
+        FingerDirDown,
+        FingerDirRight
     } FingerDirection;
 
     typedef struct _OmniTouchFinger
@@ -35,13 +37,13 @@ namespace ise
 	    int tipX, tipY, tipZ;
 	    int endX, endY, endZ;
         float width;
-        float cosTheta;
+        float dx, dy;
         FingerDirection direction;
         bool isOnSurface;
 
         struct _OmniTouchFinger() { }
-        struct _OmniTouchFinger(int tipX, int tipY, int tipZ, int endX, int endY, int endZ) : tipX(tipX), tipY(tipY), tipZ(tipZ), endX(endX), endY(endY), endZ(endZ), isOnSurface(false), direction(FingerDirVertical) { }
-        bool operator<(const _OmniTouchFinger& ref) const { return endY - tipY > ref.endY - ref.tipY; }	//sort more to less
+        struct _OmniTouchFinger(int tipX, int tipY, int tipZ, int endX, int endY, int endZ) : tipX(tipX), tipY(tipY), tipZ(tipZ), endX(endX), endY(endY), endZ(endZ), isOnSurface(false), direction(FingerDirUp) { }
+        bool operator<(const _OmniTouchFinger& ref) const { return endY - tipY > ref.endY - ref.tipY; }	//sort more to less     
     } OmniTouchFinger;
 
     typedef struct __IntPoint3D
@@ -73,6 +75,8 @@ namespace ise
         static const int MAX_FINGER_PIXEL_LENGTH = 128; //in pixels. TODO: compute this from max finger length (in real) 
         static const int FLOOD_FILL_RADIUS = 128;
         static const double MIN_FINGER_COLOR_PDF;
+        static const float MIN_STRIP_OVERLAP;
+        static const float MIN_FINGER_DIR_OVERLAP;
 
     private:
         //settings
@@ -179,12 +183,18 @@ namespace ise
         template <_ImageDirection dir> 
         void findFingers();
 
-        template <_ImageDirection dir> 
         void floodHitTest();
         
+        void combineFingers();
+
+        //these inlines only used in Detector.cpp
         inline void convertProjectiveToRealWorld(int x, int y, int depth, double& rx, double& ry, double& rz);
         inline double getSquaredDistanceInRealWorld(int x1, int y1, int depth1, int x2, int y2, int depth2);
+        static inline float getSegOverlapPercentage(float min1, float max1, float min2, float max2);
+        static inline float pointToLineDistance(float x0, float y0, float dx, float dy, float x, float y);
+        static float fingerOverlapPercentage(const _OmniTouchFinger& f1, const _OmniTouchFinger& f2, cv::Mat& debugFrame);
         
+        template <_ImageDirection dir>
         void drawFingerBoundingBox(const _OmniTouchFinger& finger);
 
     public:

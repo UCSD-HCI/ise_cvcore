@@ -25,6 +25,7 @@ static KinectSimulator* _kinectSimulator;
 static Detector* _detector;
 static bool _steppingMode;
 static bool _steppingPause;
+static int _jumpToFrame;
 
 void glutDisplay()
 {
@@ -38,7 +39,7 @@ void glutDisplay()
     }
 
     _steppingPause = true;
-
+    
     if (_kinectSimulator->capture() == KinectSimulator::ERROR_KINECT_EOF)
 	{
 		glutLeaveMainLoop();
@@ -70,9 +71,15 @@ void glutDisplay()
         of.close();
     }*/
 
+    if (!_steppingMode && _jumpToFrame != -1 && _kinectSimulator->getCurrentFrame() == _jumpToFrame)
+    {
+        _steppingMode = true;
+        _steppingPause = true;
+    }
+
     if (_steppingMode)
     {
-        printf("Frame: %d\n", _kinectSimulator->getCurrentFrame());
+        printf("Frame: %d\t\t\t\t\n", _kinectSimulator->getCurrentFrame());
     }
     else
     {
@@ -104,9 +111,23 @@ void glutKeyboard(uchar key, int x, int y)
         _steppingPause = false;
         break;
 
+    case 'j':
+        printf("Jump to: ");
+        scanf("%d", &_jumpToFrame);
+        _steppingMode = false;
+        break;
+
     case 27:
         glutLeaveMainLoop();
         break;
+    }
+}
+
+void glutMouse(int button, int state, int x, int y)
+{
+    if (state == GLUT_DOWN)
+    {
+        printf("Mouse at: %d, %d\n", x % _settings.depthWidth, y % _settings.depthHeight);
     }
 }
 
@@ -148,9 +169,15 @@ int main(int argc, char** argv)
     _detector = new Detector(_settings, _rgbFrame, _depthFrame, _depthToRgbCoordFrame, _debugFrame, _debugFrame2);
     _detector->updateDynamicParameters(dynamicParams);
 
-	//init glut
+	//init glut 
+#ifdef DEBUG
     _steppingMode = true;
+#else
+    _steppingMode = false;
+#endif
+
     _steppingPause = false;
+    _jumpToFrame = -1;
 	glutInit(&argc, argv);
 	glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB);
 	glutInitWindowSize(_settings.depthWidth * 2, _settings.depthHeight);
@@ -165,6 +192,7 @@ int main(int argc, char** argv)
 	glutDisplayFunc(glutDisplay);
 	glutIdleFunc(glutDisplay);
     glutKeyboardFunc(glutKeyboard);
+    glutMouseFunc(glutMouse);
 	glutMainLoop();	
 
 	//release resources

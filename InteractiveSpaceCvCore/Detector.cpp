@@ -17,6 +17,8 @@ using namespace cv;
 using namespace ise;
 
 const double Detector::MIN_FINGER_COLOR_PDF = 1e-4;
+const float Detector::MIN_STRIP_OVERLAP = 0.3f;
+const float Detector::MIN_FINGER_DIR_OVERLAP = 0.3f;
 
 Detector::Detector(const CommonSettings& settings, const cv::Mat& rgbFrame, const cv::Mat& depthFrame, const cv::Mat& depthToColorCoordFrame, cv::Mat& debugFrame, cv::Mat& debugFrame2) :
     //initialization list
@@ -99,8 +101,9 @@ FingerDetectionResults Detector::detect()
 
     findFingers<DirDefault>();
     findFingers<DirTransposed>();
-    floodHitTest<DirDefault>();
-    floodHitTest<DirTransposed>();
+    combineFingers();
+    //floodHitTest<DirDefault>();
+    //floodHitTest<DirTransposed>();
     
     transpose(_transposedDebugFrame, _debugFrame2);
 
@@ -137,6 +140,19 @@ double Detector::getSquaredDistanceInRealWorld(int x1, int y1, int depth1, int x
 	convertProjectiveToRealWorld(x2, y2, depth2, rx2, ry2, rz2);
 
 	return ((rx1 - rx2) * (rx1 - rx2) + (ry1 - ry2) * (ry1 - ry2) + (rz1 - rz2) * (rz1 - rz2));
+}
+
+inline float Detector::getSegOverlapPercentage(float min1, float max1, float min2, float max2)
+{
+    if (min1 >= max2 || min2 >= max1)
+    {
+        return 0;
+    }
+    
+    float p[4] = {min1, max1, min2, max2};
+    sort(p, p + 4);
+
+    return (p[2] - p[1]) / (p[3] - p[0]);
 }
 
 template <_ImageDirection dir> 
@@ -212,7 +228,9 @@ void Detector::findFingers()
 
                     _OmniTouchStripDev* candidate = stripsHost + searchDownOffset;
 
-                    if (candidate->end > currTop->start && candidate->start < currTop->end)	//overlap!
+                    float overlap = getSegOverlapPercentage(candidate->start, candidate->end, currTop->start, currTop->end);
+                    //if (candidate->end > currTop->start && candidate->start < currTop->end)	//overlap!
+                    if (overlap > MIN_STRIP_OVERLAP)
 					{
                         _stripBuffer.push_back(stripsHost + searchDownOffset);
                         
@@ -239,8 +257,7 @@ void Detector::findFingers()
             _OmniTouchStripDev* last = _stripBuffer[_stripBuffer.size() - 1];
             
             OmniTouchFinger finger;
-            finger.direction = (dir == DirTransposed ? FingerDirHorizontal : FingerDirVertical);
-
+            
             //int firstMidCol = (first->start + first->end) / 2;
             finger.tipX = (first->start + first->end) / 2;
             finger.tipY = first->row;
@@ -312,8 +329,10 @@ void Detector::findFingers()
                         pixelCount++;
 
                         //draw rgb values
-                        /*const uchar* rgbPixel = _rgbFrame.ptr(cy) + cx * 3;
-                        memcpy(dstPixel, rgbPixel, 3);*/
+                        /*
+                        const uchar* rgbPixel = _rgbFrame.ptr(cy) + cx * 3;
+                        memcpy(dstPixel, rgbPixel, 3);
+                        */
 					}
 
                     centerPoints.push_back(Point((rightCol + leftCol) / 2, rowFill)); 
@@ -325,25 +344,47 @@ void Detector::findFingers()
                 //printf("%f ", colorPdfScore);
                 if (colorPdfScore >= MIN_FINGER_COLOR_PDF)  //TODO: avoid hard coding
                 {
-                    //use median as the width of the finger
-                    size_t mid = widthList.size() / 2;
-                    nth_element(widthList.begin(), widthList.begin() + mid, widthList.end());
-                    finger.width = widthList[mid];
-
                     //line-fitting to find the angle; TODO: use RANSAC
                     Vec4f line;
                     fitLine(centerPoints, line, CV_DIST_HUBER, 0, 0.01, 0.01); //TODO: test performance
-                    finger.cosTheta = line[0] / line[1];
+                    
+                    if (line[1] >= 0)
+                    {
+                        finger.dx = line[0];
+                        finger.dy = line[1];
+                    }
+                    else
+                    {
+                        finger.dx = -line[0];
+                        finger.dy = -line[1];
+                    }
 
                     //filter by angle
-                    if (abs(finger.cosTheta) <= 0.8660f)   // -60 ~ +60 //TODO: avoid hard code
+                    if (abs(finger.dx) <= 0.8660f)   // -60 ~ +60 //TODO: avoid hard code
                     {
+                        //use median as the width of the finger
+                        size_t mid = widthList.size() / 2;
+                        nth_element(widthList.begin(), widthList.begin() + mid, widthList.end());
+                        finger.width = widthList[mid] * finger.dy;
+
                         //adjust tipX and endX
-                        finger.tipX = line[2] + (finger.tipY - line[3]) * line[0] / line[1];
-                        finger.endX = line[2] + (finger.endY - line[3]) * line[0] / line[1];
+                        finger.tipX = line[2] + (finger.tipY - line[3]) * finger.dx / finger.dy;
+                        finger.endX = line[2] + (finger.endY - line[3]) * finger.dx / finger.dy;
+
+                        if (dir == DirTransposed)
+                        {
+                            swap(finger.tipX, finger.tipY);
+                            swap(finger.endX, finger.endY);
+                            swap(finger.dx, finger.dy);
+                            finger.direction = FingerDirLeft;
+                        }
+                        else
+                        {
+                            finger.direction = FingerDirUp;
+                        }
 
                         fingers->push_back(finger);
-                        drawFingerBoundingBox(finger);
+                        drawFingerBoundingBox<dir>(finger);
                     }
                 }     
                 else
@@ -456,19 +497,19 @@ void Detector::floodHitTest()
 
 }
 
+template <_ImageDirection dir>
 void Detector::drawFingerBoundingBox(const _OmniTouchFinger& finger)
 {
     //float dist = sqrt(powf(finger.tipX - finger.endX, 2) + powf(finger.tipY - finger.endY, 2));
     //float sinA = (finger.endY - finger.tipY) / dist;
     //float cosA = (finger.endX - finger.tipX) / dist;
-    float cosTheta = finger.cosTheta;
-    float sinTheta = sqrt(1 - powf(finger.cosTheta, 2));
 
-    float recWidth = finger.width * sinTheta;
-    int dx = (int)(recWidth * sinTheta / 2.f + 0.5f);
-    int dy = (int)(recWidth * cosTheta / 2.f + 0.5f);
+    float cosTheta = finger.dx;
+    float sinTheta = finger.dy; //sqrt(1 - powf(finger.cosTheta, 2));
+    //(dx, dy) is normalized
 
-    //float adjEndX = finger.tipX + (finger.endY - finger.tipY) * cosTheta / sinTheta;
+    int dx = (int)(finger.width * sinTheta / 2.f + 0.5f);
+    int dy = (int)(finger.width * cosTheta / 2.f + 0.5f);
 
     Point p[4] =
     {
@@ -488,20 +529,127 @@ void Detector::drawFingerBoundingBox(const _OmniTouchFinger& finger)
     const Point* pTrArr[1] = {pTr};
     int nptsArr[1] = {4};
     
-    if (finger.direction == FingerDirHorizontal)
+    if (dir == DirTransposed)
     {
         //draw on transposed
-        cv::polylines(_transposedDebugFrame, pArr, nptsArr, 1, true, Scalar(8, 111, 161), 3);
+        cv::polylines(_transposedDebugFrame, pTrArr, nptsArr, 1, true, Scalar(8, 111, 161), 2);
 
         //draw on origin
-        cv::polylines(_debugFrame, pTrArr, nptsArr, 1, true, Scalar(8, 111, 161), 3);
+        cv::polylines(_debugFrame, pArr, nptsArr, 1, true, Scalar(8, 111, 161), 2);
     }
     else
     {
         //draw on origin
-        cv::polylines(_debugFrame, pArr, nptsArr, 1, true, Scalar(255, 137, 0), 3);
+        cv::polylines(_debugFrame, pArr, nptsArr, 1, true, Scalar(255, 137, 0), 2);
 
         //draw on transposed
-        cv::polylines(_transposedDebugFrame, pTrArr, nptsArr, 1, true, Scalar(255, 137, 0), 3);
+        cv::polylines(_transposedDebugFrame, pTrArr, nptsArr, 1, true, Scalar(255, 137, 0), 2);
     }
 }
+
+float Detector::pointToLineDistance(float x0, float y0, float dx, float dy, float x, float y)
+{
+    return abs(dy * (x - x0) - dx * (y - y0));
+}
+
+float Detector::fingerOverlapPercentage(const _OmniTouchFinger& f1, const _OmniTouchFinger& f2, Mat& debugFrame)
+{
+    float height1 = sqrt(powf(f1.endY - f1.tipY, 2) + powf(f1.endX - f1.tipX, 2));
+    float height2 = sqrt(powf(f2.endY - f2.tipY, 2) + powf(f2.endX - f2.tipX, 2));
+
+    float area1 = height1 * f1.width;
+    float area2 = height2 * f2.width;
+
+    const _OmniTouchFinger* pf1;
+    const _OmniTouchFinger* pf2;
+
+    if (area1 > area2)
+    {
+        pf1 = &f2;
+        pf2 = &f1;
+        swap(height1, height2);
+        swap(area1, area2);
+    }
+    else
+    {
+        pf1 = &f1;
+        pf2 = &f2;
+    }
+    //now 1 is smaller, 2 is bigger
+    
+    //rotate to rectify the bigger one
+    float cosTheta = pf2->dy;
+    float sinTheta = pf2->dx;
+    float tipX2 = pf2->tipX * cosTheta - pf2->tipY * sinTheta;
+    float tipY2 = pf2->tipX * sinTheta + pf2->tipY * cosTheta;
+    float tipX1 = pf1->tipX * cosTheta - pf1->tipY * sinTheta;
+    float tipY1 = pf1->tipX * sinTheta + pf1->tipY * cosTheta;
+    float dx1 = pf1->dx * cosTheta - pf1->dy * sinTheta;
+    float dy1 = pf1->dx * sinTheta + pf1->dy * cosTheta;
+    //now dx1, dy1 still normalized
+    
+    float xMin = tipX2 - pf2->width / 2;
+    float xMax = tipX2 + pf2->width / 2;
+    float yMin = tipY2;
+    float yMax = tipY2 + height2;
+
+    int nOverlap = 0;
+    //try sample points TODO: better method     //TODO: omp here?
+    for (int hi = 0; hi < height1; hi++)
+    {
+        for (int wi = -pf1->width / 2; wi < pf1->width / 2; wi++)
+        {
+            float x = tipX1 + dx1 * hi + dy1 * wi;
+            float y = tipY1 + dy1 * hi - dx1 * wi;
+            //float x = tipX1 + wi * dy1 - hi * dx1;
+            //float y = tipY1 + wi * dx1 + hi * dy1;
+            if (x >= xMin && x <= xMax && y >= yMin && y <= yMax)
+            {
+                nOverlap++;
+
+                //debug
+                int xOrigin = (int)(x * cosTheta + y * sinTheta + 0.5f);
+                int yOrigin = (int)(-x * sinTheta + y * cosTheta + 0.5f);
+
+                if (xOrigin >= 0 && xOrigin < 640 && yOrigin >= 0 && yOrigin < 480)
+                {
+                    uchar* px = debugFrame.ptr(yOrigin) + xOrigin * 3;
+                    px[0] = 255;
+                    px[1] = 255;
+                    px[2] = 0;
+                }
+            }
+        }
+    }
+
+    return nOverlap / (area1 + area2 - nOverlap);
+}
+
+void Detector::combineFingers()
+{
+    //find overlaps
+    for (int i = 0; i < _fingers.size(); i++)
+    {
+        for (int j = 0; j < _transposedFingers.size(); j++)
+        {
+            float r = fingerOverlapPercentage(_fingers[i], _transposedFingers[j], _debugFrame);
+            if (r >= MIN_FINGER_DIR_OVERLAP)
+            {
+                if (abs(_fingers[i].dx) <= abs(_transposedFingers[i].dx))
+                {
+                    //choose i, erase j
+                    _transposedFingers.erase(_transposedFingers.begin() + j);
+                    j--;
+                }
+                else
+                {
+                    //choose j, replace i
+                    _fingers[i] = _transposedFingers[j];
+                }
+            }
+        }
+    }
+
+    _fingers.insert(_fingers.end(), _transposedFingers.begin(), _transposedFingers.end());
+}
+
