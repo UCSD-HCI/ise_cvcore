@@ -435,15 +435,22 @@ void Detector::gpuProcess()
     //refine debug image
     dim3 threads(16, 32);
     dim3 grid(divUp(_settings.depthWidth, threads.x), divUp(_settings.depthHeight, threads.y));
-    convertScaleAbsKernel<DirDefault><<<grid, threads, 0, cudaStreamDepthDebug>>>(_debugSobelEqFrameGpu);
-    gpu::equalizeHist(_debugSobelEqFrameGpu, _debugSobelEqFrameGpu, _debugSobelEqHistGpu, _debugSobelEqBufferGpu, _gpuStreamDepthDebug);
-    
+    if (DRAW_DEBUG_IMAGE)
+    {
+        convertScaleAbsKernel<DirDefault><<<grid, threads, 0, cudaStreamDepthDebug>>>(_debugSobelEqFrameGpu);
+        gpu::equalizeHist(_debugSobelEqFrameGpu, _debugSobelEqFrameGpu, _debugSobelEqHistGpu, _debugSobelEqBufferGpu, _gpuStreamDepthDebug);
+    }
+
     //refine transposed debug image
     dim3 trThreads(16, 32);
     dim3 trGrid(divUp(_settings.depthHeight, threads.x), divUp(_settings.depthWidth, threads.y));
-    convertScaleAbsKernel<DirTransposed><<<trGrid, trThreads, 0, cudaStreamTransposedDepthDebug>>>(_transposedDebugSobelEqFrameGpu);
-    gpu::equalizeHist(_transposedDebugSobelEqFrameGpu, _transposedDebugSobelEqFrameGpu, _transposedDebugSobelEqHistGpu, 
-        _transposedDebugSobelEqBufferGpu, _gpuStreamTransposedDepthDebug);
+    
+    if (DRAW_DEBUG_IMAGE)
+    {
+        convertScaleAbsKernel<DirTransposed><<<trGrid, trThreads, 0, cudaStreamTransposedDepthDebug>>>(_transposedDebugSobelEqFrameGpu);
+        gpu::equalizeHist(_transposedDebugSobelEqFrameGpu, _transposedDebugSobelEqFrameGpu, _transposedDebugSobelEqHistGpu, 
+            _transposedDebugSobelEqBufferGpu, _gpuStreamTransposedDepthDebug);
+    }
 
     //rgb download
     _gpuStreamRgbWorking.enqueueDownload(_rgbPdfFrameGpu, _rgbPdfFrame);
@@ -461,32 +468,35 @@ void Detector::gpuProcess()
     cudaSafeCall(cudaMemcpyAsync(_transposedStripsHost, _transposedStripsDev, _transposedMaxStripRowCount * _settings.depthWidth * sizeof(_OmniTouchStripDev), 
         cudaMemcpyDeviceToHost, cudaStreamDepthWorking));
     
-
-    _gpuStreamDepthDebug.waitForCompletion();
+    if (DRAW_DEBUG_IMAGE)
+    {
+        _gpuStreamDepthDebug.waitForCompletion();
+        _gpuStreamTransposedDepthDebug.waitForCompletion();
+    }
+    
     _gpuStreamDepthWorking.waitForCompletion();  
-    _gpuStreamTransposedDepthDebug.waitForCompletion();
     _gpuStreamTransposedDepthWorking.waitForCompletion();
     cudaSafeCall(cudaGetLastError());
 
     //draw the debug image
-    refineDebugImageKernel<DirDefault><<<grid, threads, 0, cudaStreamDepthDebug>>>(_debugFrameGpu, _debugSobelEqFrameGpu);
-    refineDebugImageKernel<DirTransposed><<<trGrid, trThreads, 0, cudaStreamTransposedDepthDebug>>>(_transposedDebugFrameGpu, _transposedDebugSobelEqFrameGpu);
-    cudaSafeCall(cudaGetLastError());
-    
-    //_debugFrameGpu.download(_debugFrame);
+    if (DRAW_DEBUG_IMAGE)
+    {
+        refineDebugImageKernel<DirDefault><<<grid, threads, 0, cudaStreamDepthDebug>>>(_debugFrameGpu, _debugSobelEqFrameGpu);
+        refineDebugImageKernel<DirTransposed><<<trGrid, trThreads, 0, cudaStreamTransposedDepthDebug>>>(_transposedDebugFrameGpu, _transposedDebugSobelEqFrameGpu);
+    }
+
     _gpuStreamDepthDebug.enqueueDownload(_debugFrameGpu, _debugFrame);
     _gpuStreamTransposedDepthDebug.enqueueDownload(_transposedDebugFrameGpu, _transposedDebugFrame);
-    
     _gpuStreamDepthDebug.waitForCompletion();
     _gpuStreamTransposedDepthDebug.waitForCompletion();
-
+    cudaSafeCall(cudaGetLastError());    
+               
     //unbind textures
     cudaSafeCall(cudaUnbindTexture(texSobel));
     cudaSafeCall(cudaUnbindTexture(texDepth));
     cudaSafeCall(cudaUnbindTexture(texTrSobel));
     cudaSafeCall(cudaUnbindTexture(texTrDepth));
     
-
     _gpuStreamRgbWorking.waitForCompletion();
     
 }

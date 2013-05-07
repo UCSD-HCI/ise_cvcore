@@ -84,6 +84,7 @@ namespace ise
         static const double MIN_FINGER_COLOR_PDF;
         static const float MIN_STRIP_OVERLAP;
         static const float MIN_FINGER_DIR_OVERLAP;
+        static const bool DRAW_DEBUG_IMAGE = true; //TODO: move to dynamic parameters
 
     private:
         //settings
@@ -108,6 +109,7 @@ namespace ise
         uchar* _floodHitTestVisitedFlag;                    //warning: shared, must change for multi-threading
 
         //data for find fingers and flood hit, transposed
+        std::vector<_OmniTouchStripDev*> _transposedStripBuffer;
         std::vector<OmniTouchFinger> _transposedFingers;
         uchar* _transposedStripVisitedFlags;
         uchar* _transposedFloodHitTestVisitedFlag;

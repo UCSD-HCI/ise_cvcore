@@ -11,6 +11,7 @@
 #include <opencv2\opencv.hpp>
 #include <opencv2\gpu\gpu.hpp>
 #include <opencv2\gpu\stream_accessor.hpp>
+#include <omp.h>
 
 using namespace std;
 using namespace cv;
@@ -99,13 +100,32 @@ FingerDetectionResults Detector::detect()
 
     gpuProcess();
 
-    findFingers<DirDefault>();
-    findFingers<DirTransposed>();
+#pragma omp parallel num_threads(2)
+    {
+        if (omp_get_thread_num() == 0)
+        {
+            findFingers<DirDefault>();
+        }
+        else
+        {
+            findFingers<DirTransposed>();
+        }
+    }
+
     combineFingers();
-    //floodHitTest<DirDefault>();
-    //floodHitTest<DirTransposed>();
-    floodHitTest<FloodTestNormal>();
-    floodHitTest<FloodTestInversed>();
+
+#pragma omp parallel num_threads(2)
+    {
+        if (omp_get_thread_num() == 0)
+        {
+            floodHitTest<FloodTestNormal>();
+        }
+        else
+        {
+            floodHitTest<FloodTestInversed>();
+        }
+    }
+
     decideFingerDirections();
 
     transpose(_transposedDebugFrame, _debugFrame2);
@@ -166,6 +186,7 @@ void Detector::findFingers()
     uchar* stripVisitedFlags;
     _OmniTouchStripDev* stripsHost;
     Mat debugFrame, depthFrame;
+    std::vector<_OmniTouchStripDev*>* stripBuffer;
 
     if (dir == DirTransposed)
     {
@@ -177,6 +198,7 @@ void Detector::findFingers()
         stripsHost = _transposedStripsHost;
         debugFrame = _transposedDebugFrame;
         depthFrame = _transposedDepthFrame;
+        stripBuffer = &_transposedStripBuffer;
     }
     else
     {
@@ -188,6 +210,7 @@ void Detector::findFingers()
         stripsHost = _stripsHost;
         debugFrame = _debugFrame;
         depthFrame = _depthFrame;
+        stripBuffer = &_stripBuffer;
     }
 
     //init visited flags; 
@@ -207,15 +230,15 @@ void Detector::findFingers()
 				continue;
 			}
 
-            _stripBuffer.clear();
-            _stripBuffer.push_back(stripsHost + stripOffset);
+            stripBuffer->clear();
+            stripBuffer->push_back(stripsHost + stripOffset);
             stripVisitedFlags[stripOffset] = 1;
 
 			//search down
 			int blankCounter = 0;
 			for (int si = row; si < height; si++)   
 			{
-                _OmniTouchStripDev* currTop = _stripBuffer[_stripBuffer.size() - 1];
+                _OmniTouchStripDev* currTop = stripBuffer->at(stripBuffer->size() - 1);
 
 				//search strip
 				bool stripFound = false;
@@ -235,7 +258,7 @@ void Detector::findFingers()
                     //if (candidate->end > currTop->start && candidate->start < currTop->end)	//overlap!
                     if (overlap > MIN_STRIP_OVERLAP)
 					{
-                        _stripBuffer.push_back(stripsHost + searchDownOffset);
+                        stripBuffer->push_back(stripsHost + searchDownOffset);
                         
                         stripVisitedFlags[searchDownOffset] = 1;
 						
@@ -256,8 +279,8 @@ void Detector::findFingers()
 			}
 
 			//check length
-			_OmniTouchStripDev* first = _stripBuffer[0];
-            _OmniTouchStripDev* last = _stripBuffer[_stripBuffer.size() - 1];
+            _OmniTouchStripDev* first = stripBuffer->at(0);
+            _OmniTouchStripDev* last = stripBuffer->at(stripBuffer->size() - 1);
             
             OmniTouchFinger finger;
             
@@ -290,7 +313,7 @@ void Detector::findFingers()
 				for (int rowFill = first->row; rowFill <= last->row; rowFill++)
 				{
 					int leftCol, rightCol;
-                    _OmniTouchStripDev* nextBufferItem = _stripBuffer[bufferPos + 1];
+                    _OmniTouchStripDev* nextBufferItem = stripBuffer->at(bufferPos + 1);
 
 					if (rowFill == nextBufferItem->row)	//find next detected row
 					{
@@ -300,7 +323,7 @@ void Detector::findFingers()
 					}
 					else	//in blank area, interpolate
 					{
-                        _OmniTouchStripDev* thisBufferItem = _stripBuffer[bufferPos];
+                        _OmniTouchStripDev* thisBufferItem = stripBuffer->at(bufferPos);
 
 						float ratio = (float)(rowFill - thisBufferItem->row) / (float)(nextBufferItem->row - thisBufferItem->row);
                         leftCol = (int)(thisBufferItem->start + (nextBufferItem->start - thisBufferItem->start) * ratio + 0.5f);
@@ -311,8 +334,8 @@ void Detector::findFingers()
 					{
                         uchar* dstPixel = debugFrame.ptr(rowFill) + colFill * 3;
                         
-						//dstPixel[0] = 255;
-						//dstPixel[2] = 255;
+						dstPixel[0] = 255;
+						dstPixel[2] = 255;
 
                         //read color
                         int dx = (dir == DirTransposed ? rowFill : colFill);
@@ -334,8 +357,8 @@ void Detector::findFingers()
 
                         //draw rgb values
                         
-                        const uchar* rgbPixel = _rgbFrame.ptr(cy) + cx * 3;
-                        memcpy(dstPixel, rgbPixel, 3);
+                        //const uchar* rgbPixel = _rgbFrame.ptr(cy) + cx * 3;
+                        //memcpy(dstPixel, rgbPixel, 3);
                         
 					}
 
