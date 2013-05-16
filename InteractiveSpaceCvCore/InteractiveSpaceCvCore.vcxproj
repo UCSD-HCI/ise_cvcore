@@ -45,7 +45,7 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LibraryPath>$(ProjectDir)\glew_x64\lib\;$(OPENCV_LIB_DIR);$(ProjectDir)\freeglut\lib\x64;$(KINECTSDK10_DIR)\lib\amd64;$(LibraryPath)</LibraryPath>
-    <IncludePath>$(ProjectDir)\glew_x64\include\;$(ProjectDir)\freeglut\include\;$(OPENCV_INC_DIR);$(OPENCV_INC_DIR)\opencv;$(CUDA_PATH_V5_0)\include;$(KINECTSDK10_DIR)\inc;$(IncludePath)</IncludePath>
+    <IncludePath>$(ProjectDir)\glew_x64\include\;$(ProjectDir)\freeglut\include\;$(OPENCV_INC_DIR);$(OPENCV_INC_DIR)\opencv;$(CUDA_PATH_V5_0)\include;$(KINECTSDK10_DIR)\inc;$(SolutionDir)InteractiveSpaceCvLib;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>

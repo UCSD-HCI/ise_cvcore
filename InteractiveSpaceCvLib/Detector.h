@@ -85,6 +85,7 @@ namespace ise
         static const float MIN_STRIP_OVERLAP;
         static const float MIN_FINGER_DIR_OVERLAP;
         static const bool DRAW_DEBUG_IMAGE = true; //TODO: move to dynamic parameters
+        static const ushort DEPTH_UNKNOWN_VALUE = 0xfff8;   //65528
 
     private:
         //settings

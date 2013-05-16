@@ -356,7 +356,6 @@ void Detector::findFingers()
                         pixelCount++;
 
                         //draw rgb values
-                        
                         const uchar* rgbPixel = _rgbFrame.ptr(cy) + cx * 3;
                         memcpy(dstPixel, rgbPixel, 3);
                         

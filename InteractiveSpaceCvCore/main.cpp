@@ -59,6 +59,10 @@ void glutDisplay()
     
     glRasterPos2i(0, 1);
     glDrawPixels(_settings.depthWidth, _settings.depthHeight, GL_RGB, GL_UNSIGNED_BYTE, _debugFrame2.data);
+
+    glRasterPos2i(-1, 0);
+    glDrawPixels(_settings.rgbWidth, _settings.rgbHeight, GL_RGB, GL_UNSIGNED_BYTE, _rgbFrame.data);
+    
     //glDrawPixels(_settings.depthWidth, _settings.depthHeight, GL_LUMINANCE, GL_FLOAT, _detector->getPdfFrame().data);
 
 	glutSwapBuffers();
@@ -123,21 +127,41 @@ void glutKeyboard(uchar key, int x, int y)
     }
 }
 
+void printDebugData(int x, int y)
+{
+    x = x % _settings.depthWidth;
+    y = y % _settings.depthHeight;
+
+    printf("Mouse at: %d, %d\n", x, y);
+        
+    ushort* depth = _depthFrame.ptr<ushort>(y) + x;
+    printf("\tDepth = %d\n", *depth);
+
+    int* colorCoord = _depthToRgbCoordFrame.ptr<int>(y) + x * 2;
+    printf("\tColor Coord = %d, %d\n", colorCoord[0], colorCoord[1]);
+}
+
 void glutMouse(int button, int state, int x, int y)
 {
     if (state == GLUT_DOWN)
     {
-        printf("Mouse at: %d, %d\n", x % _settings.depthWidth, y % _settings.depthHeight);
+        printDebugData(x, y);
     }
+}
+
+void glutMotion(int x, int y)
+{
+    printDebugData(x, y);
 }
 
 int main(int argc, char** argv)
 {
-    const char pathPrefix[] = "C:\\Users\\cuda\\kinect\\record\\rec130421-2139";      //test color
+    //const char pathPrefix[] = "C:\\Users\\cuda\\kinect\\record\\rec130421-2139";      //test color
 	//const char pathPrefix[] = "C:\\Users\\cuda\\kinect\\record\\rec130412-2036";        //normal
     //const char pathPrefix[] = "C:\\Users\\cuda\\kinect\\record\\rec130417-1429";      //crazy
     //const char pathPrefix[] = "C:\\Users\\cuda\\kinect\\record\\rec130503-1806";      //rotation
     //const char pathPrefix[] = "C:\\Users\\cuda\\kinect\\record\\rec130506-2027";        //rotation(long)
+    const char pathPrefix[] = "C:\\Users\\cuda\\kinect\\record\\rec130516-1617";        //shadow noise
         
 	//load settings
 	loadCommonSettings(pathPrefix, &_settings);
@@ -181,8 +205,8 @@ int main(int argc, char** argv)
     _jumpToFrame = -1;
 	glutInit(&argc, argv);
 	glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB);
-	glutInitWindowSize(_settings.depthWidth * 2, _settings.depthHeight);
-	glutInitWindowPosition(250, 500);
+	glutInitWindowSize(_settings.depthWidth * 2, _settings.depthHeight * 2);
+	glutInitWindowPosition(250, 250);
 	glutCreateWindow("Window");
 	glutSetOption(GLUT_ACTION_ON_WINDOW_CLOSE, GLUT_ACTION_CONTINUE_EXECUTION);
 
@@ -194,6 +218,7 @@ int main(int argc, char** argv)
 	glutIdleFunc(glutDisplay);
     glutKeyboardFunc(glutKeyboard);
     glutMouseFunc(glutMouse);
+    glutMotionFunc(glutMotion);
 	glutMainLoop();	
 
 	//release resources

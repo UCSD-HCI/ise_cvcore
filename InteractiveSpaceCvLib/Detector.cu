@@ -138,12 +138,16 @@ __global__ void findStripsKernel(gpu::PtrStepb debugPtr, _OmniTouchStripDev* res
 	    for (int col = 0; col < width; col++)
 	    {
 		    float currVal = dirTex2D(dir, texSobel, texTrSobel, col, row);
-        
+            ushort depthVal = dirTex2D(dir, texDepth, texTrDepth, col, row);
         
 		    switch(state)
 		    {
 		    case StripSmooth:	//TODO: smooth
-			    if (currVal > _dynamicParametersDev[0].omniTouchParam.fingerRisingThreshold)
+                if (depthVal == 0 || depthVal == Detector::DEPTH_UNKNOWN_VALUE)
+                {
+                    //same state
+                }
+			    else if (currVal > _dynamicParametersDev[0].omniTouchParam.fingerRisingThreshold)
 			    {
 				    partialMax = currVal;
 				    partialMaxPos = col;
@@ -152,7 +156,7 @@ __global__ void findStripsKernel(gpu::PtrStepb debugPtr, _OmniTouchStripDev* res
 			    break;
 
 		    case StripRising:
-			    if (currVal > _dynamicParametersDev[0].omniTouchParam.fingerRisingThreshold)
+                if (currVal > _dynamicParametersDev[0].omniTouchParam.fingerRisingThreshold)
 			    {
 				    if (currVal > partialMax)
 				    {
@@ -167,7 +171,7 @@ __global__ void findStripsKernel(gpu::PtrStepb debugPtr, _OmniTouchStripDev* res
 			    break;
 
 		    case StripMidSmooth:
-			    if (currVal < -_dynamicParametersDev[0].omniTouchParam.fingerFallingThreshold)
+                if (currVal < -_dynamicParametersDev[0].omniTouchParam.fingerFallingThreshold)
 			    {
 				    partialMin = currVal;
 				    partialMinPos = col;
@@ -183,7 +187,8 @@ __global__ void findStripsKernel(gpu::PtrStepb debugPtr, _OmniTouchStripDev* res
 			    break;
 
 		    case StripFalling:
-			    if (currVal < -_dynamicParametersDev[0].omniTouchParam.fingerFallingThreshold)
+			    if (depthVal != 0 && depthVal != Detector::DEPTH_UNKNOWN_VALUE 
+                    && currVal < -_dynamicParametersDev[0].omniTouchParam.fingerFallingThreshold)
 			    {
 				    if (currVal < partialMin)
 				    {
