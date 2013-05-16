@@ -509,7 +509,7 @@ void Detector::floodHitTest()
 					continue;
 				}
 
-				ushort neiborDepth = *ushortValAt(depthFrame, row, col);
+                ushort neiborDepth = *(depthFrame.ptr<ushort>(row) + col);
 				if (abs(neiborDepth - centerPoint.z) > _parameters.omniTouchParam.clickFloodMaxGrad)
 				{
 					continue;					
@@ -522,7 +522,7 @@ void Detector::floodHitTest()
 				area++;
 				floodHitTestVisitedFlag[row * width + col] = 255;
 
-				uchar* dstPixel = rgb888ValAt(debugFrame, row, col);
+				uchar* dstPixel = depthFrame.ptr(row) + col * 3;
 				dstPixel[0] = 255;
 				dstPixel[1] = 255;
 				dstPixel[2] = 0;
