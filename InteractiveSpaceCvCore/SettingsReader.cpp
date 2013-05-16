@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <cxcore.h>
 
-int loadCommonSettings(const char* pathPrefix, ise::CommonSettings* settings)
+int ise::loadCommonSettings(const char* pathPrefix, ise::CommonSettings* settings)
 {
 	settings->rgbWidth = 640;
 	settings->rgbHeight = 480;
@@ -26,7 +26,7 @@ int loadCommonSettings(const char* pathPrefix, ise::CommonSettings* settings)
 	return 0;	//TOOD: report error
 }
 
-int loadDynamicParameters(const char* pathPrefix, ise::DynamicParameters* params)
+int ise::loadDynamicParameters(const char* pathPrefix, ise::DynamicParameters* params)
 {
 	char path[255];
 	sprintf(path, "%s.yml", pathPrefix);

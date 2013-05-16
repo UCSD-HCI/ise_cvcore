@@ -138,7 +138,7 @@ int main(int argc, char** argv)
     //const char pathPrefix[] = "C:\\Users\\cuda\\kinect\\record\\rec130417-1429";      //crazy
     //const char pathPrefix[] = "C:\\Users\\cuda\\kinect\\record\\rec130503-1806";      //rotation
     //const char pathPrefix[] = "C:\\Users\\cuda\\kinect\\record\\rec130506-2027";        //rotation(long)
-
+        
 	//load settings
 	loadCommonSettings(pathPrefix, &_settings);
 	DynamicParameters dynamicParams;
