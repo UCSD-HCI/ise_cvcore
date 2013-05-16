@@ -522,7 +522,7 @@ void Detector::floodHitTest()
 				area++;
 				floodHitTestVisitedFlag[row * width + col] = 255;
 
-				uchar* dstPixel = depthFrame.ptr(row) + col * 3;
+				uchar* dstPixel = debugFrame.ptr(row) + col * 3;
 				dstPixel[0] = 255;
 				dstPixel[1] = 255;
 				dstPixel[2] = 0;
