@@ -3,7 +3,7 @@
 #define ISE_DETECTOR_H
 
 #include "DataTypes.h"
-#include <opencv2\opencv.hpp>
+#include <cv.h>
 #include <opencv2\gpu\gpu.hpp>
 #include <vector>
 #include <driver_types.h>
