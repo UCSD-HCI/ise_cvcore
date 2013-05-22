@@ -464,18 +464,11 @@ void Detector::floodHitTest()
 
 		_IntPoint3D p;
 
-        if (dir == FloodTestInversed)
-        {
-            p.x = it->endX;
-		    p.y = it->endY;
-		    p.z = it->endZ;
-        }
-        else
-        {
-		    p.x = it->tipX;
-		    p.y = it->tipY;
-		    p.z = it->tipZ;
-        }
+        float t = (dir == FloodTestInversed ? 0.9f : 0.1f); //TODO: avoid hard coding
+        p.x = it->tipX + t * (it->endX - it->tipX);
+        p.y = it->tipY + t * (it->endY - it->tipY);
+        p.z = it->tipZ + t * (it->endZ - it->tipZ);
+
 		dfsQueue.push_back(p);
 
 		while(!dfsQueue.empty())
