@@ -50,7 +50,8 @@ void Detector::cudaSafeCall(cudaError_t err)
     //TODO: better handler
     if (err != 0)
     {
-        printf("%s\n", cudaGetErrorString(err));
+        const char* errStr = cudaGetErrorString(err);
+        printf("%s\n", errStr);
         assert(0); 
     }
 }

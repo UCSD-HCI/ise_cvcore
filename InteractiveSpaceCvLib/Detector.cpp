@@ -7,9 +7,6 @@
 #include <deque>
 #include <algorithm>
 
-#include <cv.h>
-#include <opencv2\opencv.hpp>
-#include <opencv2\gpu\gpu.hpp>
 #include <opencv2\gpu\stream_accessor.hpp>
 #include <omp.h>
 
@@ -97,7 +94,7 @@ Detector::~Detector()
 FingerDetectionResults Detector::detect()
 {
     transpose(_depthFrame, _transposedDepthFrame);
-
+    
     gpuProcess();
 
 #pragma omp parallel num_threads(2)
@@ -397,14 +394,14 @@ void Detector::findFingers()
                         finger.width = widthList[mid] * finger.dy;
 
                         //adjust tipX and endX
-                        finger.tipX = line[2] + (finger.tipY - line[3]) * finger.dx / finger.dy;
-                        finger.endX = line[2] + (finger.endY - line[3]) * finger.dx / finger.dy;
+                        finger.tipX = (int)(line[2] + (finger.tipY - line[3]) * finger.dx / finger.dy + 0.5f);
+                        finger.endX = (int)(line[2] + (finger.endY - line[3]) * finger.dx / finger.dy + 0.5f);
                         
                         //adjust depth
                         Vec4f depthLine;
                         fitLine(depthList, depthLine, CV_DIST_HUBER, 0, 0.01, 0.01);
-                        finger.tipZ = depthLine[3] + (finger.tipY - depthLine[2]) * depthLine[1] / depthLine[0];
-                        finger.endZ = depthLine[3] + (finger.endY - depthLine[2]) * depthLine[1] / depthLine[0];
+                        finger.tipZ = (int)(depthLine[3] + (finger.tipY - depthLine[2]) * depthLine[1] / depthLine[0] + 0.5f);
+                        finger.endZ = (int)(depthLine[3] + (finger.endY - depthLine[2]) * depthLine[1] / depthLine[0] + 0.5f);
 
                         if (dir == DirTransposed)
                         {
@@ -467,18 +464,11 @@ void Detector::floodHitTest()
 
 		_IntPoint3D p;
 
-        if (dir == FloodTestInversed)
-        {
-            p.x = it->endX;
-		    p.y = it->endY;
-		    p.z = it->endZ;
-        }
-        else
-        {
-		    p.x = it->tipX;
-		    p.y = it->tipY;
-		    p.z = it->tipZ;
-        }
+        float t = (dir == FloodTestInversed ? 0.9f : 0.1f); //TODO: avoid hard coding
+        p.x = it->tipX + t * (it->endX - it->tipX);
+        p.y = it->tipY + t * (it->endY - it->tipY);
+        p.z = it->tipZ + t * (it->endZ - it->tipZ);
+
 		dfsQueue.push_back(p);
 
 		while(!dfsQueue.empty())
