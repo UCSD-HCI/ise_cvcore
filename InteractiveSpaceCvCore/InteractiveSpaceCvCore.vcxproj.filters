@@ -16,6 +16,9 @@
     <Filter Include="DLLx64">
       <UniqueIdentifier>{2f625fa1-f41c-431f-b6e4-a68ba13fdd12}</UniqueIdentifier>
     </Filter>
+    <Filter Include="DLLx32">
+      <UniqueIdentifier>{fbaaafee-72d6-4f7a-8ce4-c7950a44e6ce}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp">
@@ -37,11 +40,17 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
+    <CustomBuild Include="glew_x64\bin\glew32.dll">
+      <Filter>DLLx64</Filter>
+    </CustomBuild>
     <CustomBuild Include="freeglut\bin\x64\freeglut.dll">
       <Filter>DLLx64</Filter>
     </CustomBuild>
-    <CustomBuild Include="glew_x64\bin\glew32.dll">
-      <Filter>DLLx64</Filter>
+    <CustomBuild Include="freeglut\bin\freeglut.dll">
+      <Filter>DLLx32</Filter>
+    </CustomBuild>
+    <CustomBuild Include="glew_x32\bin\glew32.dll">
+      <Filter>DLLx32</Filter>
     </CustomBuild>
   </ItemGroup>
 </Project>
