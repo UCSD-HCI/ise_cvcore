@@ -334,28 +334,32 @@ void Detector::findFingers()
 						dstPixel[0] = 255;
 						dstPixel[2] = 255;
 
-                        //read color
-                        int dx = (dir == DirTransposed ? rowFill : colFill);
-                        int dy = (dir == DirTransposed ? colFill : rowFill);
+                        if (isFlagEnabled(ISE_COLOR_MODEL))
+                        {
 
-                        const int* mapCoord = (int*)_depthToColorCoordFrame.ptr(dy) + dx * 2;
-                        int cx = mapCoord[0];
-                        int cy = mapCoord[1];
-                        const float* pdfPixel = (float*)_rgbPdfFrame.ptr(cy) + cx;
+                            //read color
+                            int dx = (dir == DirTransposed ? rowFill : colFill);
+                            int dy = (dir == DirTransposed ? colFill : rowFill);
+
+                            const int* mapCoord = (int*)_depthToColorCoordFrame.ptr(dy) + dx * 2;
+                            int cx = mapCoord[0];
+                            int cy = mapCoord[1];
+                            const float* pdfPixel = (float*)_rgbPdfFrame.ptr(cy) + cx;
                         
-                        /* //draw pdf values
-                        dstPixel[0] = (uchar)(*pdfPixel * 1000.0f * 255.0f + 0.5f);
-                        dstPixel[1] = dstPixel[0];
-                        dstPixel[2] = dstPixel[0];
-                        */
+                            /* //draw pdf values
+                            dstPixel[0] = (uchar)(*pdfPixel * 1000.0f * 255.0f + 0.5f);
+                            dstPixel[1] = dstPixel[0];
+                            dstPixel[2] = dstPixel[0];
+                            */
 
-                        colorPdfScore += *pdfPixel;
+                            colorPdfScore += *pdfPixel;
+                            
+                            //draw rgb values
+                            const uchar* rgbPixel = _rgbFrame.ptr(cy) + cx * 3;
+                            memcpy(dstPixel, rgbPixel, 3);
+                        }
+
                         pixelCount++;
-
-                        //draw rgb values
-                        const uchar* rgbPixel = _rgbFrame.ptr(cy) + cx * 3;
-                        memcpy(dstPixel, rgbPixel, 3);
-                        
 					}
 
                     int centerCol = (rightCol + leftCol) / 2;
@@ -368,7 +372,8 @@ void Detector::findFingers()
                 colorPdfScore /= pixelCount;
 
                 //printf("%f ", colorPdfScore);
-                if (colorPdfScore >= MIN_FINGER_COLOR_PDF)  //TODO: avoid hard coding
+                if ((!isFlagEnabled(ISE_COLOR_MODEL)) ||
+                    colorPdfScore >= MIN_FINGER_COLOR_PDF) 
                 {
                     //line-fitting to find the angle; TODO: use RANSAC
                     Vec4f line;

@@ -59,6 +59,7 @@ namespace ise
     typedef struct _DynamicParameters
     {
 	    OmniTouchParameters omniTouchParam;
+        unsigned int flags;
     } DynamicParameters;
 
     typedef struct _FingerDetectionResults
@@ -68,6 +69,13 @@ namespace ise
 	    Finger fingers[ISE_MAX_FINGER_NUM];
 
     } FingerDetectionResults;
+
+    typedef enum
+    {
+        ISE_FLAG_ENABLED = 0x1,
+        ISE_DEBUG_WINDOW = 0x2,
+        ISE_COLOR_MODEL = 0x4,
+    } DetectorFlags;
 }
 
 #endif

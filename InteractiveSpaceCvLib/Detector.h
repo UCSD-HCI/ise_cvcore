@@ -84,7 +84,6 @@ namespace ise
         static const double MIN_FINGER_COLOR_PDF;
         static const float MIN_STRIP_OVERLAP;
         static const float MIN_FINGER_DIR_OVERLAP;
-        static const bool DRAW_DEBUG_IMAGE = true; //TODO: move to dynamic parameters
         static const ushort DEPTH_UNKNOWN_VALUE = 0xfff8;   //65528
 
     private:
@@ -182,6 +181,11 @@ namespace ise
         static inline float pointToLineDistance(float x0, float y0, float dx, float dy, float x, float y);
         static float fingerOverlapPercentage(const _OmniTouchFinger& f1, const _OmniTouchFinger& f2, cv::Mat& debugFrame);
         static inline void amendFingerDirection(_OmniTouchFinger& f, bool flip);  
+
+        inline bool isFlagEnabled(DetectorFlags flag) const
+        {
+            return (_parameters.flags & flag) != 0;
+        }
 
         template <_ImageDirection dir>
         void drawFingerBoundingBox(const _OmniTouchFinger& finger);

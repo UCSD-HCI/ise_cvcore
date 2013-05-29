@@ -42,6 +42,11 @@ __device__ int depthHeight()
     return (dir == DirTransposed ? _settingsDev[0].depthWidth : _settingsDev[0].depthHeight);
 }
 
+__device__ bool isFlagEnabledDev(DetectorFlags flag)
+{
+    return (_dynamicParametersDev[0].flags & flag) != 0;
+}
+
 //choose texture according to direction
 #define dirTex2D(dir, tex, texTr, x, y) ((dir) == DirTransposed ? tex2D((texTr), (x), (y)) : tex2D((tex), (x), (y)))
 
@@ -70,8 +75,7 @@ void Detector::cudaInit()
     //strips transposed
     cudaSafeCall(cudaMallocHost(&_transposedStripsHost, (MAX_STRIPS_PER_ROW + 1) * _settings.depthWidth * sizeof(_OmniTouchStripDev)));
     cudaSafeCall(cudaMalloc(&_transposedStripsDev, (MAX_STRIPS_PER_ROW + 1) * _settings.depthWidth * sizeof(_OmniTouchStripDev)));
-
-
+    
     //init histogram for debug
 	_maxHistogramSize = _settings.maxDepthValue * 48 * 2;
     cudaSafeCall(cudaMemcpyToSymbol(_maxHistogramSizeDev, &_maxHistogramSize, sizeof(int)));
@@ -426,22 +430,24 @@ void Detector::gpuProcess()
     findStripsKernel<DirTransposed><<<trStripBlock, trStripThread, trStripThread * sizeof(int), cudaStreamTransposedDepthWorking>>>
         (_transposedDebugFrameGpu, _transposedStripsDev);
     
+    if (isFlagEnabled(ISE_COLOR_MODEL))
+    {
+        //rgb manipulation
+        _gpuStreamRgbWorking.enqueueUpload(_rgbFrame, _rgbFrameGpu);
+        _gpuStreamRgbWorking.enqueueConvert(_rgbFrameGpu, _rgbLabFrameGpu, CV_32FC3, 1.f / 255.f);
+        gpu::cvtColor(_rgbLabFrameGpu, _rgbLabFrameGpu, CV_RGB2Luv, 0, _gpuStreamRgbWorking);
 
-    //rgb manipulation
-    _gpuStreamRgbWorking.enqueueUpload(_rgbFrame, _rgbFrameGpu);
-    _gpuStreamRgbWorking.enqueueConvert(_rgbFrameGpu, _rgbLabFrameGpu, CV_32FC3, 1.f / 255.f);
-    gpu::cvtColor(_rgbLabFrameGpu, _rgbLabFrameGpu, CV_RGB2Luv, 0, _gpuStreamRgbWorking);
-
-    //rgb skin color model
-    dim3 rgbThreads(16, 32);
-    dim3 rgbGrid(divUp(_settings.rgbWidth, rgbThreads.x), divUp(_settings.rgbHeight, rgbThreads.y));
-    applySkinColorModel<<<rgbGrid, rgbThreads, 0, cudaStreamRgbWorking>>>(_rgbLabFrameGpu, _rgbPdfFrameGpu);
-    cudaSafeCall(cudaGetLastError());
+        //rgb skin color model
+        dim3 rgbThreads(16, 32);
+        dim3 rgbGrid(divUp(_settings.rgbWidth, rgbThreads.x), divUp(_settings.rgbHeight, rgbThreads.y));
+        applySkinColorModel<<<rgbGrid, rgbThreads, 0, cudaStreamRgbWorking>>>(_rgbLabFrameGpu, _rgbPdfFrameGpu);
+        cudaSafeCall(cudaGetLastError());
+    }
 
     //refine debug image
     dim3 threads(16, 32);
     dim3 grid(divUp(_settings.depthWidth, threads.x), divUp(_settings.depthHeight, threads.y));
-    if (DRAW_DEBUG_IMAGE)
+    if (isFlagEnabled(ISE_DEBUG_WINDOW))
     {
         convertScaleAbsKernel<DirDefault><<<grid, threads, 0, cudaStreamDepthDebug>>>(_debugSobelEqFrameGpu);
         gpu::equalizeHist(_debugSobelEqFrameGpu, _debugSobelEqFrameGpu, _debugSobelEqHistGpu, _debugSobelEqBufferGpu, _gpuStreamDepthDebug);
@@ -451,7 +457,7 @@ void Detector::gpuProcess()
     dim3 trThreads(16, 32);
     dim3 trGrid(divUp(_settings.depthHeight, threads.x), divUp(_settings.depthWidth, threads.y));
     
-    if (DRAW_DEBUG_IMAGE)
+    if (isFlagEnabled(ISE_DEBUG_WINDOW))
     {
         convertScaleAbsKernel<DirTransposed><<<trGrid, trThreads, 0, cudaStreamTransposedDepthDebug>>>(_transposedDebugSobelEqFrameGpu);
         gpu::equalizeHist(_transposedDebugSobelEqFrameGpu, _transposedDebugSobelEqFrameGpu, _transposedDebugSobelEqHistGpu, 
@@ -459,7 +465,10 @@ void Detector::gpuProcess()
     }
 
     //rgb download
-    _gpuStreamRgbWorking.enqueueDownload(_rgbPdfFrameGpu, _rgbPdfFrame);
+    if (isFlagEnabled(ISE_COLOR_MODEL))
+    {
+        _gpuStreamRgbWorking.enqueueDownload(_rgbPdfFrameGpu, _rgbPdfFrame);
+    }
 
     //find strips: download data
     cudaSafeCall(cudaMemcpyFromSymbolAsync(&_maxStripRowCount, maxStripRowCountDev, sizeof(int), 0, cudaMemcpyDeviceToHost, cudaStreamDepthWorking));
@@ -474,7 +483,7 @@ void Detector::gpuProcess()
     cudaSafeCall(cudaMemcpyAsync(_transposedStripsHost, _transposedStripsDev, _transposedMaxStripRowCount * _settings.depthWidth * sizeof(_OmniTouchStripDev), 
         cudaMemcpyDeviceToHost, cudaStreamDepthWorking));
     
-    if (DRAW_DEBUG_IMAGE)
+    if (isFlagEnabled(ISE_DEBUG_WINDOW))
     {
         _gpuStreamDepthDebug.waitForCompletion();
         _gpuStreamTransposedDepthDebug.waitForCompletion();
@@ -485,17 +494,18 @@ void Detector::gpuProcess()
     cudaSafeCall(cudaGetLastError());
 
     //draw the debug image
-    if (DRAW_DEBUG_IMAGE)
+    if (isFlagEnabled(ISE_DEBUG_WINDOW))
     {
         refineDebugImageKernel<DirDefault><<<grid, threads, 0, cudaStreamDepthDebug>>>(_debugFrameGpu, _debugSobelEqFrameGpu);
         refineDebugImageKernel<DirTransposed><<<trGrid, trThreads, 0, cudaStreamTransposedDepthDebug>>>(_transposedDebugFrameGpu, _transposedDebugSobelEqFrameGpu);
+    
+        _gpuStreamDepthDebug.enqueueDownload(_debugFrameGpu, _debugFrame);
+        _gpuStreamTransposedDepthDebug.enqueueDownload(_transposedDebugFrameGpu, _transposedDebugFrame);
+        _gpuStreamDepthDebug.waitForCompletion();
+        _gpuStreamTransposedDepthDebug.waitForCompletion();
+        cudaSafeCall(cudaGetLastError());    
     }
 
-    _gpuStreamDepthDebug.enqueueDownload(_debugFrameGpu, _debugFrame);
-    _gpuStreamTransposedDepthDebug.enqueueDownload(_transposedDebugFrameGpu, _transposedDebugFrame);
-    _gpuStreamDepthDebug.waitForCompletion();
-    _gpuStreamTransposedDepthDebug.waitForCompletion();
-    cudaSafeCall(cudaGetLastError());    
                
     //unbind textures
     cudaSafeCall(cudaUnbindTexture(texSobel));
@@ -503,7 +513,10 @@ void Detector::gpuProcess()
     cudaSafeCall(cudaUnbindTexture(texTrSobel));
     cudaSafeCall(cudaUnbindTexture(texTrDepth));
     
-    _gpuStreamRgbWorking.waitForCompletion();
+    if (isFlagEnabled(ISE_COLOR_MODEL))
+    {
+        _gpuStreamRgbWorking.waitForCompletion();
+    }
     
 }
 
