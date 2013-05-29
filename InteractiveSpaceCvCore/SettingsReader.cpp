@@ -45,6 +45,7 @@ int ise::loadDynamicParameters(const char* pathPrefix, ise::DynamicParameters* p
 	params->omniTouchParam.fingerRisingThreshold = cvReadRealByName(fs, omniNode, "fingerRisingThreshold");
 	params->omniTouchParam.fingerFallingThreshold = cvReadRealByName(fs, omniNode, "fingerFallingThreshold");
 	params->omniTouchParam.clickFloodMaxGrad = cvReadRealByName(fs, omniNode, "clickFloodMaxGrad");
+    params->flags = cvReadIntByName(fs, NULL, "flags", ISE_FLAG_ENABLED | ISE_COLOR_MODEL | ISE_DEBUG_WINDOW);
 
 	cvReleaseFileStorage(&fs);
 
